@@ -130,7 +130,7 @@ Build output lands in `dist/` (do not edit directly); `dist/index.js` is the CLI
 
 ## MCP Tools
 
-The server registers **17 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 17.) This list reflects v1.1.0 of this repo.
+The server registers **19 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 19.) This list reflects v1.1.0 of this repo.
 
 **Health / auth**
 1. **toggl_check_auth** — Verify API connectivity and auth; returns the (email-masked) user and accessible workspaces.
@@ -141,25 +141,27 @@ The server registers **17 tools**, all prefixed `toggl_`, defined in the `tools`
 4. **toggl_start_timer** — Start a timer (`description`, `workspace_id`, `project_id`, `task_id`, `tags`). Workspace resolved per the rule below.
 5. **toggl_stop_timer** — Stop the currently running timer.
 6. **toggl_create_entry** — Create a completed (past) time entry. Attaches to a `project_id` and/or `client_id` (a client resolves to its single project, or requires `project_id` when it has several); takes `start` plus exactly one of `end` or `duration_minutes` (ISO 8601 datetimes; bare `YYYY-MM-DD` = local midnight); optional `description`, `task_id`, `tags`, `billable`. Workspace resolved per the rule below. Use `toggl_start_timer` for a running timer instead.
+7. **toggl_search_entries** — Search entries and return matches **with their id** (feed into `toggl_delete_entry`). Filters combine with AND: `description`/`project_name`/`client_name`/`tag` (case-insensitive substring), `project_id`/`client_id`/`workspace_id` (exact), `billable`, `start_after`/`start_before` (ISO 8601), `min_duration_minutes`/`max_duration_minutes`. Date window via `period` or `start_date`/`end_date` (defaults to ~last 31 days). Hydrated, sorted newest-first, `limit` default 50 / max 1000.
+8. **toggl_delete_entry** — Delete a time entry by `time_entry_id` (required). `workspace_id` optional — resolved from the entry when omitted. Irreversible.
 
 **Reporting**
-7. **toggl_daily_report** — Daily report (`date`, `format` `json`|`text`) with hours by project and workspace.
-8. **toggl_weekly_report** — Weekly report (`week_offset`, `format`) with daily breakdown and project summaries.
-9. **toggl_project_summary** — Total hours per project for a `period` or date range (optional `workspace_id`).
-10. **toggl_workspace_summary** — Total hours per workspace for a `period` or date range.
+9. **toggl_daily_report** — Daily report (`date`, `format` `json`|`text`) with hours by project and workspace.
+10. **toggl_weekly_report** — Weekly report (`week_offset`, `format`) with daily breakdown and project summaries.
+11. **toggl_project_summary** — Total hours per project for a `period` or date range (optional `workspace_id`).
+12. **toggl_workspace_summary** — Total hours per workspace for a `period` or date range.
 
 **Management**
-11. **toggl_list_workspaces** — List all available workspaces.
-12. **toggl_list_projects** — List projects for a workspace.
-13. **toggl_list_clients** — List clients for a workspace.
+13. **toggl_list_workspaces** — List all available workspaces.
+14. **toggl_list_projects** — List projects for a workspace.
+15. **toggl_list_clients** — List clients for a workspace.
 
 **Cache management**
-14. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
-15. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
-16. **toggl_clear_cache** — Clear all cached data.
+16. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
+17. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
+18. **toggl_clear_cache** — Clear all cached data.
 
 **Timeline**
-17. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
+19. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
 
 ## Environment Variables
 

@@ -3,6 +3,7 @@ process.env.TZ = 'Europe/London';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildTimeEntryInterval,
+  filterHydratedEntries,
   generateWeeklyReport,
   formatDuration,
   getDateRange,
@@ -243,5 +244,139 @@ describe('buildTimeEntryInterval', () => {
 
     expect(interval.start).toBe('2026-07-11T09:00:00.000Z');
     expect(interval.stop).toBe('2026-07-11T09:10:00.000Z');
+  });
+});
+
+describe('filterHydratedEntries', () => {
+  const hydrated = (overrides: Partial<HydratedTimeEntry>): HydratedTimeEntry => ({
+    id: 1,
+    workspace_id: 100,
+    workspace_name: 'Acme',
+    start: '2026-07-10T09:00:00.000Z',
+    duration: 3600,
+    duration_seconds: 3600,
+    running: false,
+    tags: [],
+    tag_ids: [],
+    tag_names: [],
+    ...overrides,
+  });
+
+  const entries: HydratedTimeEntry[] = [
+    hydrated({
+      id: 1,
+      description: 'Write API docs',
+      project_id: 10,
+      project_name: 'Website',
+      client_id: 500,
+      client_name: 'Globex',
+      start: '2026-07-10T09:00:00.000Z',
+      duration_seconds: 1800,
+      billable: true,
+      tags: ['docs'],
+      tag_names: ['docs'],
+    }),
+    hydrated({
+      id: 2,
+      description: 'Fix login bug',
+      project_id: 11,
+      project_name: 'Mobile App',
+      client_id: 501,
+      client_name: 'Initech',
+      start: '2026-07-11T14:00:00.000Z',
+      duration_seconds: 5400,
+      billable: false,
+      tags: ['bug', 'urgent'],
+      tag_names: ['bug', 'urgent'],
+    }),
+    hydrated({
+      id: 3,
+      description: 'Standup meeting',
+      workspace_id: 200,
+      workspace_name: 'Side Projects',
+      start: '2026-07-12T08:00:00.000Z',
+      duration_seconds: 900,
+    }),
+  ];
+
+  const ids = (result: HydratedTimeEntry[]) => result.map((entry) => entry.id);
+
+  it('returns everything when no criteria are given', () => {
+    expect(ids(filterHydratedEntries(entries, {}))).toEqual([1, 2, 3]);
+  });
+
+  it('matches description case-insensitively as a substring', () => {
+    expect(ids(filterHydratedEntries(entries, { description: 'LOGIN' }))).toEqual([2]);
+  });
+
+  it('matches project and client names case-insensitively', () => {
+    expect(ids(filterHydratedEntries(entries, { project_name: 'web' }))).toEqual([1]);
+    expect(ids(filterHydratedEntries(entries, { client_name: 'initech' }))).toEqual([2]);
+  });
+
+  it('excludes entries without a project/client when those name filters are set', () => {
+    expect(ids(filterHydratedEntries(entries, { project_name: 'app' }))).toEqual([2]);
+    // 'e' appears in both "Globex" and "Initech"; entry 3 has no client so it is excluded.
+    expect(ids(filterHydratedEntries(entries, { client_name: 'e' }))).toEqual([1, 2]);
+  });
+
+  it('matches exact ids for project, client, and workspace', () => {
+    expect(ids(filterHydratedEntries(entries, { project_id: 10 }))).toEqual([1]);
+    expect(ids(filterHydratedEntries(entries, { client_id: 501 }))).toEqual([2]);
+    expect(ids(filterHydratedEntries(entries, { workspace_id: 200 }))).toEqual([3]);
+  });
+
+  it('filters by billable flag', () => {
+    expect(ids(filterHydratedEntries(entries, { billable: true }))).toEqual([1]);
+    expect(ids(filterHydratedEntries(entries, { billable: false }))).toEqual([2, 3]);
+  });
+
+  it('matches any tag case-insensitively', () => {
+    expect(ids(filterHydratedEntries(entries, { tag: 'URGENT' }))).toEqual([2]);
+    expect(ids(filterHydratedEntries(entries, { tag: 'missing' }))).toEqual([]);
+  });
+
+  it('filters by start_after and start_before (inclusive bounds)', () => {
+    expect(ids(filterHydratedEntries(entries, { start_after: '2026-07-11T00:00:00Z' }))).toEqual([
+      2, 3,
+    ]);
+    expect(ids(filterHydratedEntries(entries, { start_before: '2026-07-11T14:00:00Z' }))).toEqual([
+      1, 2,
+    ]);
+    expect(
+      ids(
+        filterHydratedEntries(entries, {
+          start_after: '2026-07-11T00:00:00Z',
+          start_before: '2026-07-11T23:59:59Z',
+        })
+      )
+    ).toEqual([2]);
+  });
+
+  it('filters by duration bounds in minutes', () => {
+    // durations: id1=30m, id2=90m, id3=15m
+    expect(ids(filterHydratedEntries(entries, { min_duration_minutes: 30 }))).toEqual([1, 2]);
+    expect(ids(filterHydratedEntries(entries, { max_duration_minutes: 30 }))).toEqual([1, 3]);
+    expect(
+      ids(filterHydratedEntries(entries, { min_duration_minutes: 20, max_duration_minutes: 60 }))
+    ).toEqual([1]);
+  });
+
+  it('combines multiple criteria with AND', () => {
+    expect(
+      ids(filterHydratedEntries(entries, { billable: false, min_duration_minutes: 60 }))
+    ).toEqual([2]);
+    expect(ids(filterHydratedEntries(entries, { project_name: 'web', billable: false }))).toEqual(
+      []
+    );
+  });
+
+  it('rejects invalid datetime and negative duration bounds', () => {
+    expect(() => filterHydratedEntries(entries, { start_after: 'nope' })).toThrow(
+      /Invalid start_after/
+    );
+    expect(() => filterHydratedEntries(entries, { min_duration_minutes: -5 })).toThrow(
+      /min_duration_minutes must be a non-negative number/
+    );
   });
 });

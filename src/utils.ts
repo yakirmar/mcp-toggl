@@ -142,6 +142,79 @@ export function buildTimeEntryInterval(args: {
   };
 }
 
+// Criteria for narrowing a set of already-hydrated time entries. All provided
+// fields combine with AND. Text fields are case-insensitive substring matches.
+export interface EntrySearchCriteria {
+  description?: string;
+  project_name?: string;
+  client_name?: string;
+  project_id?: number;
+  client_id?: number;
+  workspace_id?: number;
+  tag?: string;
+  billable?: boolean;
+  start_after?: string; // ISO 8601 datetime
+  start_before?: string; // ISO 8601 datetime
+  min_duration_minutes?: number;
+  max_duration_minutes?: number;
+}
+
+function includesCI(haystack: string | undefined, needle: string): boolean {
+  return (haystack ?? '').toLowerCase().includes(needle.toLowerCase());
+}
+
+function validateDurationBound(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative number.`);
+  }
+  return value * 60;
+}
+
+// Filter hydrated entries by the given criteria. Pure and side-effect free so
+// the search logic can be unit tested independently of the Toggl API.
+export function filterHydratedEntries(
+  entries: HydratedTimeEntry[],
+  criteria: EntrySearchCriteria
+): HydratedTimeEntry[] {
+  const startAfter = criteria.start_after
+    ? parseDateTime(criteria.start_after, 'start_after').getTime()
+    : undefined;
+  const startBefore = criteria.start_before
+    ? parseDateTime(criteria.start_before, 'start_before').getTime()
+    : undefined;
+  const minSeconds = validateDurationBound(criteria.min_duration_minutes, 'min_duration_minutes');
+  const maxSeconds = validateDurationBound(criteria.max_duration_minutes, 'max_duration_minutes');
+
+  return entries.filter((entry) => {
+    if (criteria.description && !includesCI(entry.description, criteria.description)) return false;
+    if (criteria.project_name && !includesCI(entry.project_name, criteria.project_name)) {
+      return false;
+    }
+    if (criteria.client_name && !includesCI(entry.client_name, criteria.client_name)) return false;
+    if (criteria.project_id !== undefined && entry.project_id !== criteria.project_id) return false;
+    if (criteria.client_id !== undefined && entry.client_id !== criteria.client_id) return false;
+    if (criteria.workspace_id !== undefined && entry.workspace_id !== criteria.workspace_id) {
+      return false;
+    }
+    if (criteria.billable !== undefined && Boolean(entry.billable) !== criteria.billable) {
+      return false;
+    }
+    if (criteria.tag) {
+      const names = entry.tag_names ?? entry.tags ?? [];
+      if (!names.some((name) => includesCI(name, criteria.tag!))) return false;
+    }
+    if (startAfter !== undefined || startBefore !== undefined) {
+      const startMs = new Date(entry.start).getTime();
+      if (startAfter !== undefined && startMs < startAfter) return false;
+      if (startBefore !== undefined && startMs > startBefore) return false;
+    }
+    if (minSeconds !== undefined && entry.duration_seconds < minSeconds) return false;
+    if (maxSeconds !== undefined && entry.duration_seconds > maxSeconds) return false;
+    return true;
+  });
+}
+
 export function isDatePeriod(value: unknown): value is DatePeriod {
   return (
     value === 'today' ||

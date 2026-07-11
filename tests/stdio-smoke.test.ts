@@ -210,3 +210,80 @@ describe.skipIf(!existsSync(entryPoint))('toggl_create_entry over stdio', () => 
     });
   });
 });
+
+describe.skipIf(!existsSync(entryPoint))('search and delete tools over stdio', () => {
+  async function withClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
+    const client = new Client({ name: 'mcp-toggl-test', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      env: {
+        ...process.env,
+        TOGGL_API_KEY: 'dummy-token',
+        TOGGL_API_TOKEN: '',
+        TOGGL_TOKEN: '',
+      },
+    });
+
+    await client.connect(transport);
+    try {
+      return await run(client);
+    } finally {
+      await client.close();
+    }
+  }
+
+  it('registers toggl_search_entries with its filter inputs', async () => {
+    await withClient(async (client) => {
+      const tools = await client.listTools();
+      const tool = tools.tools.find((t) => t.name === 'toggl_search_entries');
+
+      expect(tool).toBeDefined();
+      const properties = tool?.inputSchema.properties as Record<string, unknown> | undefined;
+      for (const key of [
+        'description',
+        'project_name',
+        'client_name',
+        'client_id',
+        'tag',
+        'billable',
+        'start_after',
+        'start_before',
+        'min_duration_minutes',
+        'max_duration_minutes',
+        'limit',
+      ]) {
+        expect(properties).toHaveProperty(key);
+      }
+    });
+  });
+
+  it('registers toggl_delete_entry requiring time_entry_id', async () => {
+    await withClient(async (client) => {
+      const tools = await client.listTools();
+      const tool = tools.tools.find((t) => t.name === 'toggl_delete_entry');
+
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema.required).toEqual(['time_entry_id']);
+    });
+  });
+
+  it('rejects a delete without a valid time_entry_id before any API call', async () => {
+    await withClient(async (client) => {
+      const missing = await client.callTool({ name: 'toggl_delete_entry', arguments: {} });
+      const missingText = (missing.content as Array<{ text?: string }>)[0]?.text ?? '{}';
+      const missingPayload = JSON.parse(missingText) as Record<string, unknown>;
+      expect(missingPayload.error).toBe(true);
+      expect(missingPayload.message).toContain('time_entry_id is required');
+
+      const invalid = await client.callTool({
+        name: 'toggl_delete_entry',
+        arguments: { time_entry_id: -3 },
+      });
+      const invalidText = (invalid.content as Array<{ text?: string }>)[0]?.text ?? '{}';
+      const invalidPayload = JSON.parse(invalidText) as Record<string, unknown>;
+      expect(invalidPayload.error).toBe(true);
+      expect(invalidPayload.message).toContain('positive integer');
+    });
+  });
+});

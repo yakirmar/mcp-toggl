@@ -18,6 +18,7 @@ import {
 } from './workspace.js';
 import {
   buildTimeEntryInterval,
+  filterHydratedEntries,
   getDateRange,
   generateDailyReport,
   generateWeeklyReport,
@@ -37,6 +38,15 @@ function parseInclusiveEndDate(value: string): Date {
   const date = parseLocalYMD(value);
   date.setDate(date.getDate() + 1);
   return date;
+}
+
+// Parse a required positive-integer entity id from tool arguments.
+function requireEntryId(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('time_entry_id is required and must be a positive integer.');
+  }
+  return parsed;
 }
 
 function jsonResponse(data: unknown) {
@@ -380,6 +390,119 @@ const tools: Tool[] = [
         },
       },
       required: ['start'],
+    },
+  },
+  {
+    name: 'toggl_search_entries',
+    description:
+      'Search time entries and return matches including their id (use the id with toggl_delete_entry). ' +
+      'All filters combine with AND; text filters (description, project_name, client_name, tag) are case-insensitive substring matches. ' +
+      'Date window: pass period or start_date/end_date (YYYY-MM-DD, inclusive, local); defaults to roughly the last 31 days. ' +
+      'start_after/start_before further narrow by entry start time (ISO 8601 datetime). ' +
+      'Results are hydrated with project/workspace/client/tag names and sorted newest-first.',
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Case-insensitive substring match on the entry description.',
+        },
+        project_name: {
+          type: 'string',
+          description: 'Case-insensitive substring match on the project name.',
+        },
+        client_name: {
+          type: 'string',
+          description: 'Case-insensitive substring match on the client name.',
+        },
+        project_id: {
+          type: 'number',
+          description: 'Exact project id to match.',
+        },
+        client_id: {
+          type: 'number',
+          description: 'Exact client id to match.',
+        },
+        workspace_id: {
+          type: 'number',
+          description: 'Exact workspace id to match.',
+        },
+        tag: {
+          type: 'string',
+          description: 'Case-insensitive substring match against any of the entry tags.',
+        },
+        billable: {
+          type: 'boolean',
+          description: 'Match only billable (true) or non-billable (false) entries.',
+        },
+        period: {
+          type: 'string',
+          enum: ['today', 'yesterday', 'week', 'lastWeek', 'month', 'lastMonth'],
+          description: 'Predefined date window to search within (alternative to start_date/end_date).',
+        },
+        start_date: {
+          type: 'string',
+          description: 'Window start (YYYY-MM-DD, inclusive, local timezone).',
+        },
+        end_date: {
+          type: 'string',
+          description: 'Window end (YYYY-MM-DD, inclusive, local timezone).',
+        },
+        start_after: {
+          type: 'string',
+          description: 'Only entries starting at or after this ISO 8601 datetime.',
+        },
+        start_before: {
+          type: 'string',
+          description: 'Only entries starting at or before this ISO 8601 datetime.',
+        },
+        min_duration_minutes: {
+          type: 'number',
+          description: 'Only entries at least this many minutes long.',
+        },
+        max_duration_minutes: {
+          type: 'number',
+          description: 'Only entries at most this many minutes long.',
+        },
+        limit: {
+          type: 'number',
+          minimum: 1,
+          maximum: 1000,
+          default: 50,
+          description: 'Maximum number of matches to return (default: 50, max: 1000).',
+        },
+      },
+    },
+  },
+  {
+    name: 'toggl_delete_entry',
+    description:
+      'Delete a time entry by its id. If workspace_id is omitted it is resolved from the entry itself. ' +
+      'Use toggl_search_entries first to find the id when you do not already have it. This cannot be undone.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        time_entry_id: {
+          type: 'number',
+          description: 'Id of the time entry to delete (required).',
+        },
+        workspace_id: {
+          type: 'number',
+          description: 'Workspace the entry belongs to. If omitted, it is looked up from the entry.',
+        },
+      },
+      required: ['time_entry_id'],
     },
   },
 
@@ -893,6 +1016,92 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'toggl_search_entries': {
+        await ensureCache();
+
+        // Default to roughly the last 31 days; override with period or explicit dates.
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        let start = new Date(todayMidnight);
+        start.setDate(start.getDate() - 31);
+        let end = new Date(todayMidnight);
+        end.setDate(end.getDate() + 1);
+
+        if (args?.period) {
+          const range = getDateRange(args.period as any);
+          start = range.start;
+          end = range.end;
+        } else {
+          if (args?.start_date) start = parseLocalYMD(args.start_date as string);
+          if (args?.end_date) end = parseInclusiveEndDate(args.end_date as string);
+        }
+
+        const entries = await api.getTimeEntriesForDateRange(start, end);
+        const hydrated = await cache.hydrateTimeEntries(entries);
+
+        const matches = filterHydratedEntries(hydrated, {
+          description: args?.description as string | undefined,
+          project_name: args?.project_name as string | undefined,
+          client_name: args?.client_name as string | undefined,
+          project_id: args?.project_id as number | undefined,
+          client_id: args?.client_id as number | undefined,
+          workspace_id: args?.workspace_id as number | undefined,
+          tag: args?.tag as string | undefined,
+          billable: args?.billable as boolean | undefined,
+          start_after: args?.start_after as string | undefined,
+          start_before: args?.start_before as string | undefined,
+          min_duration_minutes: args?.min_duration_minutes as number | undefined,
+          max_duration_minutes: args?.max_duration_minutes as number | undefined,
+        });
+
+        // Newest first so the most likely deletion target is at the top.
+        matches.sort((a, b) => new Date(b.start).getTime() - new Date(a.start).getTime());
+
+        const requestedLimit = typeof args?.limit === 'number' ? args.limit : 50;
+        const limit = Math.min(Math.max(1, Math.floor(requestedLimit)), 1000);
+        const limited = matches.slice(0, limit);
+
+        return jsonResponse({
+          count: matches.length,
+          returned: limited.length,
+          truncated: matches.length > limited.length,
+          entries: limited,
+        });
+      }
+
+      case 'toggl_delete_entry': {
+        const timeEntryId = requireEntryId(args?.time_entry_id);
+
+        let workspaceId = parseWorkspaceId(args?.workspace_id);
+        if (workspaceId === undefined) {
+          let existing: TimeEntry | undefined;
+          try {
+            existing = await api.getTimeEntry(timeEntryId);
+          } catch (error) {
+            throw new Error(
+              `Time entry ${timeEntryId} was not found. Provide workspace_id, ` +
+                `or use toggl_search_entries to find a valid id.`,
+              { cause: error }
+            );
+          }
+          if (!existing?.workspace_id) {
+            throw new Error(
+              `Time entry ${timeEntryId} was not found. Use toggl_search_entries to find a valid id.`
+            );
+          }
+          workspaceId = existing.workspace_id;
+        }
+
+        await api.deleteTimeEntry(workspaceId, timeEntryId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Time entry deleted',
+          time_entry_id: timeEntryId,
+          workspace_id: workspaceId,
+        });
       }
 
       // Reporting tools

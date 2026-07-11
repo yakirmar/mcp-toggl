@@ -122,6 +122,31 @@ describe('createTimeEntry', () => {
   });
 });
 
+describe('deleteTimeEntry', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('issues a DELETE to the workspace-scoped entry endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200 }));
+
+    const api = new TogglAPI('token');
+    await expect(api.deleteTimeEntry(42, 999)).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string }];
+    expect(url).toContain('/workspaces/42/time_entries/999');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('treats a 204 No Content response as success', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 204 }));
+
+    const api = new TogglAPI('token');
+    await expect(api.deleteTimeEntry(42, 999)).resolves.toBeUndefined();
+  });
+});
+
 describe('list endpoint pagination', () => {
   afterEach(() => {
     fetchMock.mockReset();

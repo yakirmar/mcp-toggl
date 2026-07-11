@@ -45,6 +45,14 @@
       "description": "Create a completed time entry for a project/client with a start and end or length"
     },
     {
+      "name": "toggl_search_entries",
+      "description": "Search time entries by project, client, description, tags, time, or duration and return their ids"
+    },
+    {
+      "name": "toggl_delete_entry",
+      "description": "Delete a time entry by id"
+    },
+    {
       "name": "toggl_daily_report",
       "description": "Generate a daily report with project and workspace breakdowns"
     },
