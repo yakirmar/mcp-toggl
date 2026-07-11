@@ -15,6 +15,9 @@ import type {
   UpdateProjectRequest,
   CreateClientRequest,
   UpdateClientRequest,
+  WorkspaceUser,
+  ReportSearchParams,
+  ReportRow,
   TimelineEvent,
 } from './types.js';
 
@@ -59,7 +62,13 @@ const MAX_AUTO_RETRY_MS = 30_000;
 export class TogglAPI {
   private baseUrl = 'https://api.track.toggl.com/api/v9';
   private timelineBaseUrl = 'https://track.toggl.com/api/v9';
+  private reportsBaseUrl = 'https://api.track.toggl.com/reports/api/v3';
   private headers: Record<string, string>;
+
+  // Reports API paging. The cap bounds a runaway pull of a large workspace;
+  // callers are told when it bites via `truncated`.
+  private static readonly REPORT_PAGE_SIZE = 200;
+  private static readonly REPORT_MAX_PAGES = 25;
 
   constructor(apiKey: string) {
     // Basic auth: API key as username, 'api_token' as password
@@ -72,10 +81,26 @@ export class TogglAPI {
     };
   }
 
-  // Generic API request method
+  // Generic API request against the core v9 base URL.
   private async request<T>(method: string, endpoint: string, body?: any, retries = 3): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`;
+    const { data } = await this.requestAbsolute<T>(
+      method,
+      `${this.baseUrl}${endpoint}`,
+      body,
+      retries
+    );
+    return data;
+  }
 
+  // Same transport (auth, retry, 429/402 handling) but against a caller-supplied
+  // URL, and it surfaces response headers — the Reports API lives on a different
+  // base URL and paginates via X-Next-Row-Number.
+  private async requestAbsolute<T>(
+    method: string,
+    url: string,
+    body?: any,
+    retries = 3
+  ): Promise<{ data: T; headers: Record<string, string | null> }> {
     for (let i = 0; i < retries; i++) {
       try {
         const response = await fetch(url, {
@@ -131,12 +156,17 @@ export class TogglAPI {
           throw err;
         }
 
+        const headers = {
+          'x-next-row-number': response.headers.get('X-Next-Row-Number'),
+          'x-next-id': response.headers.get('X-Next-ID'),
+        };
+
         // Handle 204 No Content
         if (response.status === 204) {
-          return {} as T;
+          return { data: {} as T, headers };
         }
 
-        return (await response.json()) as T;
+        return { data: (await response.json()) as T, headers };
       } catch (error: any) {
         if (error?.noRetry || i === retries - 1) throw error;
         // Exponential backoff for transient/network errors
@@ -419,23 +449,49 @@ export class TogglAPI {
     return this.getTimeEntriesForDateRange(firstDay, firstDayNextMonth);
   }
 
-  // Reports API endpoints (if needed)
-  async getDetailedReport(workspaceId: number, params: any): Promise<any> {
-    // This would use the Reports API v3 if needed
-    // https://api.track.toggl.com/reports/api/v3/workspace/{workspace_id}/search/time_entries
-    const reportsUrl = `https://api.track.toggl.com/reports/api/v3/workspace/${workspaceId}/search/time_entries`;
+  // Workspace members. Requires admin rights on the workspace; non-admin tokens
+  // typically get a 403 rather than a filtered list.
+  async getWorkspaceUsers(workspaceId: number): Promise<WorkspaceUser[]> {
+    const users = await this.request<WorkspaceUser[]>('GET', `/workspaces/${workspaceId}/users`);
+    return Array.isArray(users) ? users : [];
+  }
 
-    const response = await fetch(reportsUrl, {
-      method: 'POST',
-      headers: this.headers,
-      body: JSON.stringify(params),
-    });
+  // Detailed report across ALL users in the workspace that the token can see.
+  // This is the only way to read other users' entries — /me/time_entries is
+  // self-scoped by definition. Pages via the X-Next-Row-Number response header.
+  async searchDetailedReport(
+    workspaceId: number,
+    params: ReportSearchParams = {}
+  ): Promise<{ rows: ReportRow[]; truncated: boolean }> {
+    const url = `${this.reportsBaseUrl}/workspace/${workspaceId}/search/time_entries`;
+    const pageSize = params.page_size ?? TogglAPI.REPORT_PAGE_SIZE;
 
-    if (!response.ok) {
-      throw new Error(`Reports API error: ${response.status}`);
+    const rows: ReportRow[] = [];
+    let firstRowNumber = params.first_row_number;
+
+    for (let page = 0; page < TogglAPI.REPORT_MAX_PAGES; page++) {
+      const body: ReportSearchParams = {
+        ...params,
+        page_size: pageSize,
+        ...(firstRowNumber !== undefined ? { first_row_number: firstRowNumber } : {}),
+      };
+
+      const { data, headers } = await this.requestAbsolute<ReportRow[]>('POST', url, body);
+      if (!Array.isArray(data) || data.length === 0) break;
+
+      rows.push(...data);
+
+      const next = headers['x-next-row-number'];
+      const nextRowNumber = next ? Number.parseInt(next, 10) : NaN;
+      if (!Number.isFinite(nextRowNumber) || nextRowNumber <= 0) break;
+      // Guard against an endpoint that keeps handing back the same cursor.
+      if (firstRowNumber !== undefined && nextRowNumber === firstRowNumber) break;
+      firstRowNumber = nextRowNumber;
     }
 
-    return response.json();
+    // Signal when we stopped at the page cap rather than at the end of the data.
+    const truncated = rows.length >= TogglAPI.REPORT_MAX_PAGES * pageSize;
+    return { rows, truncated };
   }
 
   async getTimeline(): Promise<TimelineEvent[]> {

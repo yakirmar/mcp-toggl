@@ -34,7 +34,19 @@ Upstream could only *list* projects and clients. This fork adds create, update, 
 | `toggl_update_client` | Rename, annotate, or **archive** (`archived: true`) a client. |
 | `toggl_delete_client` | Permanently remove a client. |
 
-Together these let you say things like *"log 2 hours on the Website project for yesterday's client call"*, *"find the duplicate standup entry from last week and delete it"*, or *"create a Retainer project for Globex, billable at 150/hr"*.
+### Team and admin visibility
+
+Upstream can only ever see **your own** time, because every entry read goes through Toggl's `/me/time_entries` — an endpoint that is self-scoped by definition, no matter how much admin power your token has. To see what your *team* did, you have to go through Toggl's separate **Reports API**. This fork does that.
+
+| Tool | Why it exists |
+| --- | --- |
+| `toggl_list_users` | Who is in the workspace — id, name, email, admin/owner flags. |
+| `toggl_team_entries` | What everyone worked on. Cross-user entries filterable by `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, description, and duration. |
+| `toggl_team_summary` | Hours per user for a period — total, billable, and how many projects each person touched. |
+
+> **These three require workspace admin rights.** Access is enforced by Toggl, not by this server: a non-admin token simply sees only its own data (or gets a 403). **They also expose teammates' entry descriptions** — treat the output as sensitive.
+
+Together these let you say things like *"log 2 hours on the Website project for yesterday's client call"*, *"find the duplicate standup entry from last week and delete it"*, *"create a Retainer project for Globex, billable at 150/hr"*, or *"who on the team logged the most billable hours last month?"*.
 
 **Timezone handling:** datetimes accept an explicit offset (`2026-07-11T09:00:00Z`, `...+03:00`) for an absolute time. Without an offset — including a bare `YYYY-MM-DD` — the time is interpreted in **the timezone of the machine running the server**.
 
@@ -88,6 +100,9 @@ Delete the duplicate entry I created this morning
 Create a billable "Retainer" project for the Globex client at 150/hr
 Archive the old Website project
 Rename the client "Acme" to "Acme Corp"
+Who is in my workspace?
+Who logged the most billable hours last month?
+What did Jane work on this week?
 Show me yesterday's hours as a chart
 What apps did I use most today?
 Generate a daily report for last Friday
@@ -209,6 +224,20 @@ Added by this fork. See [Fork Additions](#fork-additions).
 | `toggl_delete_client` | Deletes a client by `client_id`. Irreversible — prefer archiving. |
 
 All six invalidate the workspace's cached project/client lists, so the next list read is fresh.
+
+### Team and Admin
+
+Added by this fork. **Requires workspace admin rights** — see [Fork Additions](#team-and-admin-visibility).
+
+| Tool | What it does |
+| --- | --- |
+| `toggl_list_users` | Lists workspace members with id, name, email, and admin/owner flags. Use the ids as `user_ids` below. |
+| `toggl_team_entries` | Time entries across all users, via the Reports API. Filters: `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, `description`, `min_duration_minutes`, `max_duration_minutes`. Hydrated with user/project/client names, newest-first (`limit` default 100, max 1000). |
+| `toggl_team_summary` | Hours per user for the window — total, billable, entry count, and project count. Sorted by hours descending. |
+
+**Date windows here are inclusive on both ends** (`start_date` … `end_date`), matching Toggl's Reports API, and default to the last 31 days.
+
+**Permissions:** Toggl enforces visibility. If your token is not a workspace admin, these tools return only your own data rather than the team's — they will not error loudly, so verify with `toggl_list_users` first.
 
 ### Cache Management
 

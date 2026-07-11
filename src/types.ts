@@ -265,6 +265,91 @@ export interface UpdateTimeEntryRequest {
   duration?: number;
 }
 
+// A member of a workspace (admin-visible via GET /workspaces/{id}/users).
+export interface WorkspaceUser {
+  id: number;
+  name?: string;
+  fullname?: string;
+  email?: string;
+  admin?: boolean;
+  owner?: boolean;
+  active?: boolean;
+  at?: string;
+}
+
+// Filters accepted by the Reports API v3 detailed search endpoint.
+// NOTE: unlike the core v9 API, Reports API dates are INCLUSIVE.
+export interface ReportSearchParams {
+  start_date?: string; // YYYY-MM-DD, inclusive
+  end_date?: string; // YYYY-MM-DD, inclusive
+  user_ids?: number[];
+  project_ids?: number[];
+  client_ids?: number[];
+  tag_ids?: number[];
+  task_ids?: number[];
+  billable?: boolean;
+  description?: string;
+  max_duration_seconds?: number;
+  min_duration_seconds?: number;
+  page_size?: number;
+  first_row_number?: number;
+}
+
+// A row from the detailed report. Toggl groups entries, nesting the individual
+// time entries under `time_entries`. The response schema is not published, so
+// every field is optional and consumers must tolerate absences.
+export interface ReportRow {
+  user_id?: number;
+  username?: string;
+  project_id?: number;
+  task_id?: number;
+  billable?: boolean;
+  description?: string;
+  tag_ids?: number[];
+  row_number?: number;
+  time_entries?: ReportRowTimeEntry[];
+  [key: string]: unknown;
+}
+
+export interface ReportRowTimeEntry {
+  id?: number;
+  seconds?: number;
+  start?: string;
+  stop?: string;
+  at?: string;
+  [key: string]: unknown;
+}
+
+// A single flattened entry belonging to any user in the workspace.
+export interface TeamEntry {
+  id?: number;
+  user_id?: number;
+  user_name?: string;
+  description?: string;
+  project_id?: number;
+  project_name?: string;
+  client_id?: number;
+  client_name?: string;
+  task_id?: number;
+  billable?: boolean;
+  tag_ids?: number[];
+  start?: string;
+  stop?: string;
+  duration_seconds: number;
+  duration_hours: number;
+}
+
+export interface TeamUserSummary {
+  user_id?: number;
+  user_name: string;
+  total_seconds: number;
+  total_hours: number;
+  billable_seconds: number;
+  billable_hours: number;
+  entry_count: number;
+  project_count: number;
+}
+
 export interface TimelineEvent {
   id: number;
   start_time: number; // Unix timestamp in seconds

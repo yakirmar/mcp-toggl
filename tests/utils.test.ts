@@ -11,6 +11,7 @@ import {
   isDatePeriod,
   localDateRangeFromArgs,
   parseLocalYMD,
+  reportDateWindow,
   secondsToHours,
   toLocalYMD,
 } from '../src/utils.js';
@@ -415,5 +416,44 @@ describe('pickDefined', () => {
 
   it('returns an empty object when nothing is supplied', () => {
     expect(pickDefined({}, FIELDS)).toEqual({});
+  });
+});
+
+describe('reportDateWindow', () => {
+  it('returns an INCLUSIVE end date for a period, unlike the exclusive core v9 range', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-19T11:00:00Z'));
+
+    // getDateRange('week') ends exclusively on 2026-04-20; the report window must
+    // end on 2026-04-19, or the report would pull an extra day.
+    expect(getDateRange('week').end && toLocalYMD(getDateRange('week').end)).toBe('2026-04-20');
+    expect(reportDateWindow({ period: 'week' })).toEqual({
+      start_date: '2026-04-13',
+      end_date: '2026-04-19',
+    });
+  });
+
+  it('passes explicit dates through as inclusive bounds', () => {
+    expect(reportDateWindow({ start_date: '2026-07-01', end_date: '2026-07-31' })).toEqual({
+      start_date: '2026-07-01',
+      end_date: '2026-07-31',
+    });
+  });
+
+  it('defaults to the last 31 days when nothing is supplied', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-31T11:00:00Z'));
+
+    expect(reportDateWindow(undefined)).toEqual({
+      start_date: '2026-07-01',
+      end_date: '2026-07-31',
+    });
+  });
+
+  it('rejects an invalid period and a reversed range', () => {
+    expect(() => reportDateWindow({ period: 'quarter' })).toThrow(/Invalid period/);
+    expect(() =>
+      reportDateWindow({ start_date: '2026-07-31', end_date: '2026-07-01' })
+    ).toThrow(/start_date must be before or equal to end_date/);
   });
 });

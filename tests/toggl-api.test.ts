@@ -14,17 +14,20 @@ function response({
   text = '',
   json,
   retryAfter,
+  headers = {},
 }: {
   status: number;
   text?: string;
   json?: unknown;
   retryAfter?: string;
+  headers?: Record<string, string>;
 }) {
+  const all: Record<string, string | undefined> = { 'retry-after': retryAfter, ...headers };
   return {
     status,
     ok: status >= 200 && status < 300,
     headers: {
-      get: vi.fn((name: string) => (name.toLowerCase() === 'retry-after' ? retryAfter : null)),
+      get: vi.fn((name: string) => all[name.toLowerCase()] ?? null),
     },
     text: vi.fn(async () => text),
     json: vi.fn(async () => json),
@@ -277,5 +280,109 @@ describe('project and client CRUD requests', () => {
     const [deleteUrl, deleteInit] = callOf(1);
     expect(deleteUrl).toContain('/workspaces/42/clients/500');
     expect(deleteInit.method).toBe('DELETE');
+  });
+});
+
+describe('team / admin endpoints', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('GETs workspace users', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ status: 200, json: [{ id: 1, name: 'Jane', admin: true }] })
+    );
+
+    const api = new TogglAPI('token');
+    const users = await api.getWorkspaceUsers(42);
+
+    expect(users).toHaveLength(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string }];
+    expect(url).toContain('/workspaces/42/users');
+    expect(init.method).toBe('GET');
+  });
+
+  it('returns an empty array when the users payload is not a list', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: { error: 'nope' } }));
+
+    const api = new TogglAPI('token');
+    await expect(api.getWorkspaceUsers(42)).resolves.toEqual([]);
+  });
+
+  it('POSTs the detailed report to the Reports v3 base URL with the given filters', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: [{ user_id: 1 }] }));
+
+    const api = new TogglAPI('token');
+    const { rows, truncated } = await api.searchDetailedReport(42, {
+      start_date: '2026-07-01',
+      end_date: '2026-07-31',
+      user_ids: [1, 2],
+      billable: true,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(truncated).toBe(false);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+    expect(url).toBe(
+      'https://api.track.toggl.com/reports/api/v3/workspace/42/search/time_entries'
+    );
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toMatchObject({
+      start_date: '2026-07-01',
+      end_date: '2026-07-31',
+      user_ids: [1, 2],
+      billable: true,
+      page_size: 200,
+    });
+  });
+
+  it('follows X-Next-Row-Number to page through the report', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        response({
+          status: 200,
+          json: [{ user_id: 1 }],
+          headers: { 'x-next-row-number': '201' },
+        })
+      )
+      .mockResolvedValueOnce(response({ status: 200, json: [{ user_id: 2 }] }));
+
+    const api = new TogglAPI('token');
+    const { rows } = await api.searchDetailedReport(42, {});
+
+    expect(rows).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Second request resumes at the cursor the first response handed back.
+    const [, second] = fetchMock.mock.calls[1] as [string, { body: string }];
+    expect(JSON.parse(second.body)).toMatchObject({ first_row_number: 201 });
+  });
+
+  it('stops paging when the endpoint keeps returning the same cursor', async () => {
+    fetchMock.mockResolvedValue(
+      response({ status: 200, json: [{ user_id: 1 }], headers: { 'x-next-row-number': '201' } })
+    );
+
+    const api = new TogglAPI('token');
+    const { rows } = await api.searchDetailedReport(42, {});
+
+    // First page sets the cursor to 201; the second response repeats it, so we stop.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(rows).toHaveLength(2);
+  });
+
+  it('stops paging on an empty page', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        response({ status: 200, json: [{ user_id: 1 }], headers: { 'x-next-row-number': '201' } })
+      )
+      .mockResolvedValueOnce(response({ status: 200, json: [] }));
+
+    const api = new TogglAPI('token');
+    const { rows } = await api.searchDetailedReport(42, {});
+
+    expect(rows).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

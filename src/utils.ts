@@ -284,6 +284,50 @@ export function localDateRangeFromArgs(
   return { start, end };
 }
 
+// Resolve a period / start_date / end_date window to INCLUSIVE YYYY-MM-DD strings
+// for the Reports API. Note the contrast with the core v9 API, whose end_date is
+// exclusive — passing an exclusive boundary here would pull an extra day.
+// Defaults to the last 31 days when nothing is supplied.
+export function reportDateWindow(args: Record<string, unknown> | undefined): {
+  start_date: string;
+  end_date: string;
+} {
+  if (args?.period !== undefined) {
+    if (!isDatePeriod(args.period)) {
+      throw new Error(
+        `Invalid period: ${String(args.period)}. Must be one of: today, yesterday, week, lastWeek, month, lastMonth`
+      );
+    }
+    const range = getDateRange(args.period);
+    // getDateRange returns an exclusive end; step back a day to make it inclusive.
+    const inclusiveEnd = new Date(range.end);
+    inclusiveEnd.setDate(inclusiveEnd.getDate() - 1);
+    return { start_date: toLocalYMD(range.start), end_date: toLocalYMD(inclusiveEnd) };
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let start = new Date(today);
+  start.setDate(start.getDate() - 30);
+  let end = new Date(today);
+
+  if (args?.start_date !== undefined) {
+    if (typeof args.start_date !== 'string') throw new Error('start_date must be a YYYY-MM-DD string');
+    start = parseLocalYMD(args.start_date);
+  }
+  if (args?.end_date !== undefined) {
+    if (typeof args.end_date !== 'string') throw new Error('end_date must be a YYYY-MM-DD string');
+    end = parseLocalYMD(args.end_date);
+  }
+
+  if (start > end) {
+    throw new Error('start_date must be before or equal to end_date');
+  }
+
+  return { start_date: toLocalYMD(start), end_date: toLocalYMD(end) };
+}
+
 // Get date range for various periods
 export function getDateRange(period: DatePeriod): DateRange {
   const today = new Date();

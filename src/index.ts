@@ -9,6 +9,7 @@ import {
 import { config } from 'dotenv';
 import { TogglAPI, TimelineNotEnabledError, TogglAPIError } from './toggl-api.js';
 import { buildTimelineResponse } from './timeline.js';
+import { normalizeReportRows, summarizeByUser, userDisplayName } from './reports.js';
 import { CacheManager } from './cache-manager.js';
 import {
   WorkspaceResolutionError,
@@ -32,6 +33,7 @@ import {
   toLocalYMD,
   parseLocalYMD,
   localDateRangeFromArgs,
+  reportDateWindow,
 } from './utils.js';
 import type {
   CacheConfig,
@@ -41,6 +43,8 @@ import type {
   UpdateProjectRequest,
   CreateClientRequest,
   UpdateClientRequest,
+  ReportSearchParams,
+  TeamEntry,
 } from './types.js';
 
 function parseInclusiveEndDate(value: string): Date {
@@ -231,6 +235,77 @@ async function resolveWorkspaceForTool(
     getWorkspaces: () => cache.getWorkspaces(),
     action,
   });
+}
+
+// Workspace member id -> display name. Requires admin rights; when the token
+// lacks them we degrade to the username Toggl embeds in each report row rather
+// than failing the whole call.
+async function workspaceUserNames(workspaceId: number): Promise<Map<number, string>> {
+  try {
+    const users = await api.getWorkspaceUsers(workspaceId);
+    return new Map(users.map((user) => [user.id, userDisplayName(user)]));
+  } catch (error) {
+    console.error(
+      `Could not list users for workspace ${workspaceId} (admin rights required):`,
+      error
+    );
+    return new Map();
+  }
+}
+
+const REPORT_FILTER_FIELDS = [
+  'user_ids',
+  'project_ids',
+  'client_ids',
+  'tag_ids',
+  'task_ids',
+  'billable',
+  'description',
+] as const;
+
+// Shared path for both team tools: pull the cross-user detailed report, flatten
+// it, and attach user/project/client names.
+async function fetchTeamEntries(
+  workspaceId: number,
+  args: Record<string, unknown> | undefined
+): Promise<{ entries: TeamEntry[]; window: { start_date: string; end_date: string }; truncated: boolean }> {
+  const window = reportDateWindow(args);
+
+  const params: ReportSearchParams = {
+    ...pickDefined<ReportSearchParams>(args ?? {}, REPORT_FILTER_FIELDS),
+    start_date: window.start_date,
+    end_date: window.end_date,
+  };
+
+  const minMinutes = args?.min_duration_minutes;
+  if (typeof minMinutes === 'number') params.min_duration_seconds = Math.round(minMinutes * 60);
+  const maxMinutes = args?.max_duration_minutes;
+  if (typeof maxMinutes === 'number') params.max_duration_seconds = Math.round(maxMinutes * 60);
+
+  const [{ rows, truncated }, userNames, projects, clients] = await Promise.all([
+    api.searchDetailedReport(workspaceId, params),
+    workspaceUserNames(workspaceId),
+    cache.getProjects(workspaceId),
+    cache.getClients(workspaceId),
+  ]);
+
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const clientById = new Map(clients.map((client) => [client.id, client]));
+
+  const entries = normalizeReportRows(rows, userNames).map((entry) => {
+    const project = entry.project_id !== undefined ? projectById.get(entry.project_id) : undefined;
+    const clientId = project?.client_id;
+    const client = clientId !== undefined ? clientById.get(clientId) : undefined;
+
+    return {
+      ...entry,
+      project_name: project?.name,
+      client_id: clientId,
+      client_name: client?.name,
+    };
+  });
+
+  return { entries, window, truncated };
 }
 
 // Create MCP server
@@ -860,6 +935,150 @@ const tools: Tool[] = [
         },
       },
       required: ['client_id'],
+    },
+  },
+
+  // Team / admin tools (workspace-wide, require admin rights)
+  {
+    name: 'toggl_list_users',
+    description:
+      'List the members of a workspace (id, name, email, admin/owner flags). ADMIN ONLY: requires admin rights on the workspace; a non-admin token typically gets a 403. Use the returned ids as user_ids for toggl_team_entries / toggl_team_summary.',
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+      },
+    },
+  },
+  {
+    name: 'toggl_team_entries',
+    description:
+      "Get time entries for OTHER users in the workspace (what your team worked on), via the Toggl Reports API. ADMIN ONLY: what you can see is enforced by Toggl — a non-admin token sees only its own data. PRIVACY: this returns teammates' entry descriptions. Filter with user_ids (from toggl_list_users), project_ids, client_ids, tag_ids, billable, or description. Date window via period or start_date/end_date (INCLUSIVE; defaults to the last 31 days). Entries are hydrated with user/project/client names and sorted newest-first.",
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        user_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries by these user ids. Omit for all visible users.',
+        },
+        project_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries on these project ids.',
+        },
+        client_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries for these client ids.',
+        },
+        tag_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries carrying these tag ids.',
+        },
+        description: {
+          type: 'string',
+          description: 'Filter by entry description (matched by Toggl).',
+        },
+        billable: { type: 'boolean', description: 'Only billable (true) or non-billable (false).' },
+        period: {
+          type: 'string',
+          enum: ['today', 'yesterday', 'week', 'lastWeek', 'month', 'lastMonth'],
+          description: 'Predefined date window (alternative to start_date/end_date).',
+        },
+        start_date: {
+          type: 'string',
+          description: 'Window start (YYYY-MM-DD, inclusive, local timezone).',
+        },
+        end_date: {
+          type: 'string',
+          description: 'Window end (YYYY-MM-DD, inclusive, local timezone).',
+        },
+        min_duration_minutes: {
+          type: 'number',
+          description: 'Only entries at least this many minutes long.',
+        },
+        max_duration_minutes: {
+          type: 'number',
+          description: 'Only entries at most this many minutes long.',
+        },
+        limit: {
+          type: 'number',
+          minimum: 1,
+          maximum: 1000,
+          default: 100,
+          description: 'Maximum entries to return (default: 100, max: 1000).',
+        },
+      },
+    },
+  },
+  {
+    name: 'toggl_team_summary',
+    description:
+      'Total hours per user across the workspace for a period — who logged how much, how much was billable, and across how many projects. ADMIN ONLY: requires admin rights; a non-admin token sees only its own totals. Accepts the same filters and date window as toggl_team_entries (dates INCLUSIVE; defaults to the last 31 days). Sorted by total hours descending.',
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        user_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only these user ids. Omit for all visible users.',
+        },
+        project_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries on these project ids.',
+        },
+        client_ids: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Only entries for these client ids.',
+        },
+        billable: { type: 'boolean', description: 'Only billable (true) or non-billable (false).' },
+        period: {
+          type: 'string',
+          enum: ['today', 'yesterday', 'week', 'lastWeek', 'month', 'lastMonth'],
+          description: 'Predefined date window (alternative to start_date/end_date).',
+        },
+        start_date: {
+          type: 'string',
+          description: 'Window start (YYYY-MM-DD, inclusive, local timezone).',
+        },
+        end_date: {
+          type: 'string',
+          description: 'Window end (YYYY-MM-DD, inclusive, local timezone).',
+        },
+      },
     },
   },
 
@@ -1663,6 +1882,67 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           message: 'Client deleted',
           client_id: clientId,
           workspace_id: workspaceId,
+        });
+      }
+
+      // Team / admin tools
+      case 'toggl_list_users': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'listing workspace users');
+        const users = await api.getWorkspaceUsers(workspaceId);
+
+        return jsonResponse({
+          workspace_id: workspaceId,
+          count: users.length,
+          users: users.map((user) => ({
+            id: user.id,
+            name: userDisplayName(user),
+            email: user.email,
+            admin: user.admin,
+            owner: user.owner,
+            active: user.active,
+          })),
+        });
+      }
+
+      case 'toggl_team_entries': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'reading team time entries');
+        const { entries, window, truncated } = await fetchTeamEntries(workspaceId, args);
+
+        entries.sort(
+          (a, b) => new Date(b.start ?? 0).getTime() - new Date(a.start ?? 0).getTime()
+        );
+
+        const requestedLimit = typeof args?.limit === 'number' ? args.limit : 100;
+        const limit = Math.min(Math.max(1, Math.floor(requestedLimit)), 1000);
+        const limited = entries.slice(0, limit);
+
+        return jsonResponse({
+          workspace_id: workspaceId,
+          start_date: window.start_date,
+          end_date: window.end_date,
+          count: entries.length,
+          returned: limited.length,
+          truncated: truncated || entries.length > limited.length,
+          entries: limited,
+        });
+      }
+
+      case 'toggl_team_summary': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'summarizing team time');
+        const { entries, window, truncated } = await fetchTeamEntries(workspaceId, args);
+
+        const users = summarizeByUser(entries);
+        const totalSeconds = users.reduce((sum, user) => sum + user.total_seconds, 0);
+
+        return jsonResponse({
+          workspace_id: workspaceId,
+          start_date: window.start_date,
+          end_date: window.end_date,
+          user_count: users.length,
+          total_hours: secondsToHours(totalSeconds),
+          total_seconds: totalSeconds,
+          truncated,
+          users,
         });
       }
 

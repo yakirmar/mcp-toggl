@@ -102,9 +102,11 @@ Releases are automated by Release Please (`.github/workflows/release-please.yml`
               │
               ▼
 ┌──────────────────────────────────────────┐
-│  Toggl Track API v9 (REST)                │
+│  Toggl Track API (REST)                   │
 │  - api.track.toggl.com/api/v9 (core)      │
 │  - track.toggl.com/api/v9/timeline        │
+│  - api.track.toggl.com/reports/api/v3     │
+│      (team/admin cross-user reports)      │
 │  - HTTP Basic auth (token : api_token)    │
 └──────────────────────────────────────────┘
 ```
@@ -118,19 +120,20 @@ src/
 ├── cache-manager.ts    # CacheManager: in-memory TTL cache for workspaces/projects/clients/tasks/tags; warmCache, hydrateTimeEntries, stats
 ├── workspace.ts        # resolveWorkspaceId / parseWorkspaceId; WorkspaceResolutionError when workspace is ambiguous
 ├── timeline.ts         # buildTimelineResponse: filters/clips/redacts Toggl Desktop timeline events, builds per-app summary
-├── utils.ts            # Date helpers (local YMD parse/format, period→range), report generators, grouping, duration formatting
-└── types.ts            # TypeScript interfaces (TimeEntry, Workspace, Project, CacheConfig, TimelineEvent, reports, etc.)
+├── reports.ts          # normalizeReportRows / summarizeByUser / userDisplayName: defensively flattens Reports API v3 rows (schema is unpublished) into per-user team entries and summaries
+├── utils.ts            # Date helpers (local YMD parse/format, period→range, reportDateWindow), report generators, grouping, duration formatting, pickDefined
+└── types.ts            # TypeScript interfaces (TimeEntry, Workspace, Project, CacheConfig, TimelineEvent, WorkspaceUser, ReportRow, TeamEntry, etc.)
 
 scripts/setup.js        # One-time local setup CLI (npm run setup)
-tests/                  # Vitest suites (cache-manager, timeline, toggl-api, utils, workspace, stdio-smoke)
-server.json             # MCP registry manifest (mirrors the 16 tool names; version kept in sync by Release Please)
+tests/                  # Vitest suites (cache-manager, reports, timeline, toggl-api, utils, workspace, stdio-smoke)
+server.json             # MCP registry manifest (mirrors the tool names; version kept in sync by Release Please)
 ```
 
 Build output lands in `dist/` (do not edit directly); `dist/index.js` is the CLI entry exposed as the `mcp-toggl` bin.
 
 ## MCP Tools
 
-The server registers **25 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 25.) This list reflects v1.1.0 of this repo.
+The server registers **28 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 28.) This list reflects v1.1.0 of this repo.
 
 **Health / auth**
 1. **toggl_check_auth** — Verify API connectivity and auth; returns the (email-masked) user and accessible workspaces.
@@ -162,12 +165,18 @@ The server registers **25 tools**, all prefixed `toggl_`, defined in the `tools`
 21. **toggl_delete_client** — Delete a client by `client_id`. Irreversible; prefer archiving via `toggl_update_client`.
 
 **Cache management**
-22. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
-23. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
-24. **toggl_clear_cache** — Clear all cached data.
+**Team / admin (workspace-wide, require admin rights)**
+22. **toggl_list_users** — Workspace members (id, name, email, admin/owner flags). Admin-only; non-admin tokens typically get 403.
+23. **toggl_team_entries** — Time entries for *other* users via the **Reports API v3** (`/reports/api/v3/workspace/{id}/search/time_entries`). `/me/time_entries` is self-scoped, so this is the only way to read other users' entries. Filters: `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, `description`, `min`/`max_duration_minutes`. Hydrated with user/project/client names, newest-first, `limit` default 100.
+24. **toggl_team_summary** — Hours per user (total, billable, project count) for the window. Derived by aggregating the detailed report, not the separate summary endpoint.
+
+**Cache management**
+25. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
+26. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
+27. **toggl_clear_cache** — Clear all cached data.
 
 **Timeline**
-25. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
+28. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
 
 ## Environment Variables
 
@@ -201,6 +210,8 @@ Loaded from the environment or a local `.env` file via `dotenv` (`config({ quiet
 **Caching** (`src/cache-manager.ts`): in-memory TTL maps for workspaces/projects/clients/tasks/tags; `hydrateTimeEntries` attaches project/workspace names. Project/client **mutations must invalidate the cache** or reads serve a stale list for the rest of the TTL: the create/update/delete handlers call `cache.invalidateProjects(workspaceId)` / `cache.invalidateClients(workspaceId)` (the latter also invalidates projects, since a project's `client_id`/`client_name` can be orphaned by a client change). On first tool use `ensureCache` (`src/index.ts:159`) pre-warms project/client/tag data **only when it can resolve a workspace** — `TOGGL_DEFAULT_WORKSPACE_ID`, or exactly one accessible workspace. With multiple workspaces and no default set, it marks the cache warmed without pre-fetching, so those entities are fetched lazily on the first tool that resolves a workspace.
 
 **Error handling** (`src/toggl-api.ts`): `request()` retries transient/5xx/network errors with backoff but not 4xx (`noRetry`). 429 honors `Retry-After` (auto-retries only if the delay ≤ 30s, else throws `RATE_LIMITED`); 402 surfaces `TOGGL_QUOTA_LIMIT` with reset seconds. Tool handlers catch everything and return a structured `errorPayload` (never throw across the MCP boundary).
+
+**Team / admin reads** (`src/reports.ts`, `TogglAPI.searchDetailedReport`): `/me/time_entries` is **self-scoped** — it returns only the token owner's entries regardless of admin rights. Reading *other* users' entries requires the **Reports API v3** on a different base URL (`api.track.toggl.com/reports/api/v3`), which pages via the `X-Next-Row-Number` response header (hence `requestAbsolute` surfacing headers). Two traps: (1) **Reports API dates are INCLUSIVE**, unlike core v9's exclusive `end_date` — use `reportDateWindow` (`src/utils.ts`), never `parseInclusiveEndDate`; (2) Toggl **does not publish the report response schema**, so `normalizeReportRows` treats every field as optional and falls back (row-level timing when `time_entries` is absent, `row.username` when the user map is empty). `toggl_team_summary` is derived by aggregating the detailed report rather than calling the separate summary endpoint, so there is only one unverified shape to depend on. Listing workspace users requires admin; `workspaceUserNames` degrades to an empty map on 403 instead of failing the whole call.
 
 **Stdio hygiene**: this is a stdio server — never write to stdout outside protocol responses. Use `console.error`/`console.warn` for logs (enforced by the `no-console` lint rule).
 
