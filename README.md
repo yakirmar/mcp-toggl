@@ -2,10 +2,26 @@
 
 > Talk to your time tracking. Pull reports, start timers, inspect desktop activity, and turn raw Toggl data into useful recaps from Claude or any MCP-compatible client.
 
-[![npm](https://img.shields.io/npm/v/@verygoodplugins/mcp-toggl)](https://www.npmjs.com/package/@verygoodplugins/mcp-toggl)
+[![npm](https://img.shields.io/npm/v/@yakirmar/mcp-toggl)](https://www.npmjs.com/package/@yakirmar/mcp-toggl)
 [![MCP](https://img.shields.io/badge/MCP-server-blueviolet)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Toggl API](https://img.shields.io/badge/Toggl-API%20v9-red)](https://developers.track.toggl.com/docs/)
+
+> **This is a fork** of [`@verygoodplugins/mcp-toggl`](https://github.com/verygoodplugins/mcp-toggl), published as `@yakirmar/mcp-toggl`. It adds full **write and cleanup** support for time entries — see [Fork Additions](#fork-additions).
+
+## Fork Additions
+
+Upstream can read entries and start/stop timers, but it cannot log past work or remove a mistaken entry. This fork adds three tools that close that loop:
+
+| Tool | Why it exists |
+| --- | --- |
+| `toggl_create_entry` | Log work you already did — a completed entry on a project or client, with a start time plus either an end time or a length in minutes. Upstream could only start a *running* timer. |
+| `toggl_search_entries` | Find entries (and, crucially, their `id`) by description, project name, client name, tag, time window, or duration. The `id` is what you need to delete something. |
+| `toggl_delete_entry` | Remove an entry by `id`. Pair with `toggl_search_entries` when you don't already know it. |
+
+Together these let you say things like *"log 2 hours on the Website project for yesterday's client call"* or *"find the duplicate standup entry from last week and delete it"*.
+
+**Timezone handling:** datetimes accept an explicit offset (`2026-07-11T09:00:00Z`, `...+03:00`) for an absolute time. Without an offset — including a bare `YYYY-MM-DD` — the time is interpreted in **the timezone of the machine running the server**.
 
 ## See What Your Week Actually Looked Like
 
@@ -47,6 +63,9 @@ Toggl is still the source of truth. The MCP layer makes the data easier for an a
 What am I currently tracking?
 How much time did I spend on the website project this month?
 Start a timer for "PR review" on the Platform project
+Log 2 hours yesterday on the Website project for "client call"
+Find the entries I logged for "standup" last week
+Delete the duplicate entry I created this morning
 Show me yesterday's hours as a chart
 What apps did I use most today?
 Generate a daily report for last Friday
@@ -87,7 +106,7 @@ Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "mcp-toggl": {
       "command": "npx",
-      "args": ["-y", "@verygoodplugins/mcp-toggl@latest"],
+      "args": ["-y", "@yakirmar/mcp-toggl@latest"],
       "env": {
         "TOGGL_API_KEY": "your_api_key_here",
         "TOGGL_DEFAULT_WORKSPACE_ID": "123456"
@@ -108,7 +127,7 @@ What am I currently tracking?
 ### Global Install
 
 ```bash
-npm install -g @verygoodplugins/mcp-toggl
+npm install -g @yakirmar/mcp-toggl
 mcp-toggl --help
 ```
 
@@ -130,6 +149,20 @@ mcp-toggl --help
 | `toggl_get_current_entry` | Returns the running timer, elapsed seconds, and hydrated project/workspace context. |
 | `toggl_start_timer` | Starts a timer with description, optional project/task, and tags. |
 | `toggl_stop_timer` | Stops the currently running timer. |
+
+### Entry Management
+
+Added by this fork. See [Fork Additions](#fork-additions).
+
+| Tool | What it does |
+| --- | --- |
+| `toggl_create_entry` | Creates a completed (past) entry. Takes `start` plus exactly one of `end` or `duration_minutes`, with optional `description`, `project_id`, `client_id`, `task_id`, `tags`, and `billable`. |
+| `toggl_search_entries` | Searches entries and returns matches **with their `id`**. Filters combine with AND and include `description`, `project_name`, `client_name`, `tag`, `project_id`, `client_id`, `workspace_id`, `billable`, `start_after`/`start_before`, and `min_duration_minutes`/`max_duration_minutes`. |
+| `toggl_delete_entry` | Deletes an entry by `time_entry_id`. `workspace_id` is optional — it is resolved from the entry when omitted. Irreversible. |
+
+**Attaching to a project or client:** Toggl attaches entries to a *project*, not a client directly. If you pass a `client_id` without a `project_id`, the client must have exactly one project (it is resolved for you); when a client has several projects, the tool returns the candidates and asks for a `project_id`.
+
+**Searching:** the date window defaults to roughly the last 31 days. Widen it with `period` (`today`, `week`, `lastMonth`, …) or explicit `start_date`/`end_date`. Results are hydrated with names and sorted newest-first (`limit` defaults to 50, max 1000).
 
 ### Lookups
 
@@ -213,7 +246,7 @@ When in doubt, use `include_events: false`.
 ## Local Development
 
 ```bash
-git clone https://github.com/verygoodplugins/mcp-toggl.git
+git clone https://github.com/yakirmar/mcp-toggl.git
 cd mcp-toggl
 npm install
 npm run build
@@ -232,4 +265,4 @@ npm run format
 
 MIT.
 
-Built by [Very Good Plugins](https://verygoodplugins.com).
+Originally built by [Very Good Plugins](https://verygoodplugins.com). This fork is maintained at [yakirmar/mcp-toggl](https://github.com/yakirmar/mcp-toggl).
