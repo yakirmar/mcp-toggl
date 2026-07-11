@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildTimeEntryInterval,
   filterHydratedEntries,
+  pickDefined,
   generateWeeklyReport,
   formatDuration,
   getDateRange,
@@ -378,5 +379,41 @@ describe('filterHydratedEntries', () => {
     expect(() => filterHydratedEntries(entries, { min_duration_minutes: -5 })).toThrow(
       /min_duration_minutes must be a non-negative number/
     );
+  });
+});
+
+describe('pickDefined', () => {
+  const FIELDS = ['name', 'client_id', 'active', 'billable'] as const;
+
+  it('keeps only the keys the caller actually supplied', () => {
+    expect(pickDefined({ name: 'Website', billable: true }, FIELDS)).toEqual({
+      name: 'Website',
+      billable: true,
+    });
+  });
+
+  it('drops undefined and null so a partial update never clears untouched fields', () => {
+    expect(pickDefined({ name: 'Website', client_id: undefined, active: null }, FIELDS)).toEqual({
+      name: 'Website',
+    });
+  });
+
+  it('preserves falsy-but-meaningful values', () => {
+    // active: false archives a project — it must survive, unlike undefined.
+    expect(pickDefined({ active: false, client_id: 0, name: '' }, FIELDS)).toEqual({
+      active: false,
+      client_id: 0,
+      name: '',
+    });
+  });
+
+  it('ignores keys outside the allowed field list', () => {
+    expect(pickDefined({ name: 'Website', workspace_id: 7, evil: 'x' }, FIELDS)).toEqual({
+      name: 'Website',
+    });
+  });
+
+  it('returns an empty object when nothing is supplied', () => {
+    expect(pickDefined({}, FIELDS)).toEqual({});
   });
 });

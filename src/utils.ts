@@ -215,6 +215,25 @@ export function filterHydratedEntries(
   });
 }
 
+// Build a request payload from tool args, keeping only the keys the caller
+// actually supplied. Sending `undefined`/`null` for an omitted field would ask
+// Toggl to clear it, so partial updates must not include untouched keys.
+export function pickDefined<T>(
+  source: Record<string, unknown>,
+  keys: readonly string[]
+): Partial<T> {
+  const result: Record<string, unknown> = {};
+
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null) {
+      result[key] = value;
+    }
+  }
+
+  return result as Partial<T>;
+}
+
 export function isDatePeriod(value: unknown): value is DatePeriod {
   return (
     value === 'today' ||

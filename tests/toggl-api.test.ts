@@ -192,3 +192,90 @@ describe('list endpoint pagination', () => {
     expect(projects).toHaveLength(200);
   });
 });
+
+describe('project and client CRUD requests', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  const callOf = (index = 0) =>
+    fetchMock.mock.calls[index] as [string, { method: string; body?: string }];
+
+  it('POSTs a new project to the workspace projects endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: { id: 7, name: 'Website' } }));
+
+    const api = new TogglAPI('token');
+    const project = await api.createProject(42, {
+      name: 'Website',
+      client_id: 500,
+      billable: true,
+      color: '#0b83d9',
+    });
+
+    expect(project).toMatchObject({ id: 7 });
+    const [url, init] = callOf();
+    expect(url).toContain('/workspaces/42/projects');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body!)).toEqual({
+      name: 'Website',
+      client_id: 500,
+      billable: true,
+      color: '#0b83d9',
+    });
+  });
+
+  it('PUTs a partial project update to the project endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: { id: 7, active: false } }));
+
+    const api = new TogglAPI('token');
+    await api.updateProject(42, 7, { active: false });
+
+    const [url, init] = callOf();
+    expect(url).toContain('/workspaces/42/projects/7');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body!)).toEqual({ active: false });
+  });
+
+  it('DELETEs a project', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200 }));
+
+    const api = new TogglAPI('token');
+    await expect(api.deleteProject(42, 7)).resolves.toBeUndefined();
+
+    const [url, init] = callOf();
+    expect(url).toContain('/workspaces/42/projects/7');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('POSTs a new client to the workspace clients endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: { id: 500, name: 'Globex' } }));
+
+    const api = new TogglAPI('token');
+    const client = await api.createClient(42, { name: 'Globex', notes: 'Retainer' });
+
+    expect(client).toMatchObject({ id: 500 });
+    const [url, init] = callOf();
+    expect(url).toContain('/workspaces/42/clients');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body!)).toEqual({ name: 'Globex', notes: 'Retainer' });
+  });
+
+  it('PUTs a partial client update and DELETEs a client', async () => {
+    fetchMock
+      .mockResolvedValueOnce(response({ status: 200, json: { id: 500, archived: true } }))
+      .mockResolvedValueOnce(response({ status: 204 }));
+
+    const api = new TogglAPI('token');
+    await api.updateClient(42, 500, { archived: true });
+    await expect(api.deleteClient(42, 500)).resolves.toBeUndefined();
+
+    const [updateUrl, updateInit] = callOf(0);
+    expect(updateUrl).toContain('/workspaces/42/clients/500');
+    expect(updateInit.method).toBe('PUT');
+    expect(JSON.parse(updateInit.body!)).toEqual({ archived: true });
+
+    const [deleteUrl, deleteInit] = callOf(1);
+    expect(deleteUrl).toContain('/workspaces/42/clients/500');
+    expect(deleteInit.method).toBe('DELETE');
+  });
+});

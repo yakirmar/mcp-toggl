@@ -215,3 +215,86 @@ describe('cache manager', () => {
     });
   });
 });
+
+describe('cache invalidation after project/client mutations', () => {
+  it('re-fetches projects after invalidateProjects instead of serving the stale list', async () => {
+    const api = createAPI();
+    const cache = new CacheManager(config);
+    cache.setAPI(api);
+
+    await cache.getProjects(1);
+    await cache.getProjects(1);
+    // Second read is a cache hit — the API is only called once.
+    expect(api.getProjects).toHaveBeenCalledTimes(1);
+
+    cache.invalidateProjects(1);
+    await cache.getProjects(1);
+    expect(api.getProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops the individually cached project so getProject re-reads it', async () => {
+    const api = createAPI();
+    const cache = new CacheManager(config);
+    cache.setAPI(api);
+
+    await cache.getProjects(1);
+    const before = cache.getStats().projects;
+    expect(before).toBe(1);
+
+    cache.invalidateProjects(1);
+    expect(cache.getStats().projects).toBe(0);
+  });
+
+  it('re-fetches clients after invalidateClients', async () => {
+    const api = createAPI();
+    const cache = new CacheManager(config);
+    cache.setAPI(api);
+
+    await cache.getClients(1);
+    await cache.getClients(1);
+    expect(api.getClients).toHaveBeenCalledTimes(1);
+
+    cache.invalidateClients(1);
+    await cache.getClients(1);
+    expect(api.getClients).toHaveBeenCalledTimes(2);
+  });
+
+  it('also invalidates projects when a client changes, since projects carry client_id', async () => {
+    const api = createAPI();
+    const cache = new CacheManager(config);
+    cache.setAPI(api);
+
+    await cache.getProjects(1);
+    await cache.getClients(1);
+    expect(api.getProjects).toHaveBeenCalledTimes(1);
+
+    cache.invalidateClients(1);
+
+    await cache.getProjects(1);
+    // A renamed/deleted client would otherwise leave a stale client_name on projects.
+    expect(api.getProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves other workspaces untouched', async () => {
+    const api = {
+      ...createAPI(),
+      getProjects: vi.fn(async (workspaceId: number) => [
+        { id: workspaceId * 10, workspace_id: workspaceId, name: `Project ${workspaceId}` },
+      ]),
+    };
+    const cache = new CacheManager(config);
+    cache.setAPI(api);
+
+    await cache.getProjects(1);
+    await cache.getProjects(2);
+    expect(api.getProjects).toHaveBeenCalledTimes(2);
+
+    cache.invalidateProjects(1);
+
+    await cache.getProjects(2); // still cached
+    expect(api.getProjects).toHaveBeenCalledTimes(2);
+
+    await cache.getProjects(1); // invalidated
+    expect(api.getProjects).toHaveBeenCalledTimes(3);
+  });
+});

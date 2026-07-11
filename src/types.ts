@@ -226,6 +226,33 @@ export interface CreateTimeEntryRequest {
   created_with: string;
 }
 
+export interface CreateProjectRequest {
+  name: string;
+  client_id?: number;
+  active?: boolean;
+  is_private?: boolean;
+  billable?: boolean;
+  color?: string;
+  estimated_hours?: number;
+  start_date?: string; // YYYY-MM-DD
+  end_date?: string; // YYYY-MM-DD
+  currency?: string;
+  rate?: number;
+}
+
+export type UpdateProjectRequest = Partial<CreateProjectRequest>;
+
+export interface CreateClientRequest {
+  name: string;
+  notes?: string;
+}
+
+export interface UpdateClientRequest {
+  name?: string;
+  notes?: string;
+  archived?: boolean;
+}
+
 export interface UpdateTimeEntryRequest {
   project_id?: number;
   task_id?: number;

@@ -19,6 +19,7 @@ import {
 import {
   buildTimeEntryInterval,
   filterHydratedEntries,
+  pickDefined,
   getDateRange,
   generateDailyReport,
   generateWeeklyReport,
@@ -32,7 +33,15 @@ import {
   parseLocalYMD,
   localDateRangeFromArgs,
 } from './utils.js';
-import type { CacheConfig, TimelineEvent, TimeEntry } from './types.js';
+import type {
+  CacheConfig,
+  TimelineEvent,
+  TimeEntry,
+  CreateProjectRequest,
+  UpdateProjectRequest,
+  CreateClientRequest,
+  UpdateClientRequest,
+} from './types.js';
 
 function parseInclusiveEndDate(value: string): Date {
   const date = parseLocalYMD(value);
@@ -41,13 +50,37 @@ function parseInclusiveEndDate(value: string): Date {
 }
 
 // Parse a required positive-integer entity id from tool arguments.
-function requireEntryId(value: unknown): number {
+function requireId(value: unknown, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error('time_entry_id is required and must be a positive integer.');
+    throw new Error(`${field} is required and must be a positive integer.`);
   }
   return parsed;
 }
+
+function requireName(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${field} is required and must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+// Fields a caller may set when creating or updating a project / client.
+const PROJECT_FIELDS = [
+  'name',
+  'client_id',
+  'active',
+  'is_private',
+  'billable',
+  'color',
+  'estimated_hours',
+  'start_date',
+  'end_date',
+  'currency',
+  'rate',
+] as const;
+
+const CLIENT_FIELDS = ['name', 'notes', 'archived'] as const;
 
 function jsonResponse(data: unknown) {
   return {
@@ -91,7 +124,7 @@ function errorPayload(error: unknown): Record<string, unknown> {
 }
 
 // Version for CLI output and server metadata
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 // Basic CLI flags: --help / -h and --version / -v
 const argv = process.argv.slice(2);
@@ -103,7 +136,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
   console.error(
     `mcp-toggl - Toggl MCP Server\n\n` +
       `Usage:\n` +
-      `  npx @verygoodplugins/mcp-toggl@latest [--help] [--version]\n\n` +
+      `  npx @yakirmar/mcp-toggl@latest [--help] [--version]\n\n` +
       `Environment:\n` +
       `  TOGGL_API_KEY                Required Toggl API token\n` +
       `  TOGGL_DEFAULT_WORKSPACE_ID   Optional default workspace id\n` +
@@ -113,7 +146,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       `  {\n` +
       `    "mcpServers": {\n` +
       `      "mcp-toggl": {\n` +
-      `        "command": "npx @verygoodplugins/mcp-toggl@latest",\n` +
+      `        "command": "npx @yakirmar/mcp-toggl@latest",\n` +
       `        "env": { "TOGGL_API_KEY": "your_api_key_here" }\n` +
       `      }\n` +
       `    }\n` +
@@ -124,7 +157,7 @@ if (argv.includes('--help') || argv.includes('-h')) {
       `      "servers": {\n` +
       `        "mcp-toggl": {\n` +
       `          "command": "npx",\n` +
-      `          "args": ["@verygoodplugins/mcp-toggl@latest"],\n` +
+      `          "args": ["@yakirmar/mcp-toggl@latest"],\n` +
       `          "env": { "TOGGL_API_KEY": "your_api_key_here" }\n` +
       `        }\n` +
       `      }\n` +
@@ -665,6 +698,170 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    name: 'toggl_create_project',
+    description:
+      'Create a project in a workspace. Only name is required; optionally attach it to a client and set billing, color, dates, and rate.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project name (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        client_id: { type: 'number', description: 'Client to attach the project to (optional).' },
+        active: { type: 'boolean', description: 'Whether the project is active (default: true).' },
+        is_private: { type: 'boolean', description: 'Whether the project is private.' },
+        billable: { type: 'boolean', description: 'Whether the project is billable.' },
+        color: { type: 'string', description: 'Project color as a hex string, e.g. "#0b83d9".' },
+        estimated_hours: { type: 'number', description: 'Estimated hours for the project.' },
+        start_date: { type: 'string', description: 'Project start date (YYYY-MM-DD).' },
+        end_date: { type: 'string', description: 'Project end date (YYYY-MM-DD).' },
+        currency: { type: 'string', description: 'Currency code, e.g. "USD".' },
+        rate: { type: 'number', description: 'Hourly rate for the project.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'toggl_update_project',
+    description:
+      'Update an existing project. Provide project_id plus at least one field to change; omitted fields are left untouched.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project to update (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        name: { type: 'string', description: 'New project name.' },
+        client_id: {
+          type: 'number',
+          description: 'Move the project to this client.',
+        },
+        active: {
+          type: 'boolean',
+          description: 'Set false to archive the project, true to reactivate it.',
+        },
+        is_private: { type: 'boolean', description: 'Whether the project is private.' },
+        billable: { type: 'boolean', description: 'Whether the project is billable.' },
+        color: { type: 'string', description: 'Project color as a hex string.' },
+        estimated_hours: { type: 'number', description: 'Estimated hours for the project.' },
+        start_date: { type: 'string', description: 'Project start date (YYYY-MM-DD).' },
+        end_date: { type: 'string', description: 'Project end date (YYYY-MM-DD).' },
+        currency: { type: 'string', description: 'Currency code.' },
+        rate: { type: 'number', description: 'Hourly rate for the project.' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'toggl_delete_project',
+    description:
+      'Delete a project by id. This cannot be undone; time entries on the project lose their project association. To keep history, prefer toggl_update_project with active: false to archive it instead.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project to delete (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'toggl_create_client',
+    description: 'Create a client in a workspace.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Client name (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        notes: { type: 'string', description: 'Free-form notes for the client (optional).' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'toggl_update_client',
+    description:
+      'Update an existing client. Provide client_id plus at least one field to change; omitted fields are left untouched. Set archived: true to archive.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Client to update (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        name: { type: 'string', description: 'New client name.' },
+        notes: { type: 'string', description: 'Free-form notes for the client.' },
+        archived: { type: 'boolean', description: 'Archive (true) or unarchive (false).' },
+      },
+      required: ['client_id'],
+    },
+  },
+  {
+    name: 'toggl_delete_client',
+    description:
+      'Delete a client by id. This cannot be undone; projects belonging to the client lose their client association. To keep history, prefer toggl_update_client with archived: true instead.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Client to delete (required).' },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+      },
+      required: ['client_id'],
+    },
+  },
 
   // Cache management
   {
@@ -1072,7 +1269,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'toggl_delete_entry': {
-        const timeEntryId = requireEntryId(args?.time_entry_id);
+        const timeEntryId = requireId(args?.time_entry_id, 'time_entry_id');
 
         let workspaceId = parseWorkspaceId(args?.workspace_id);
         if (workspaceId === undefined) {
@@ -1357,6 +1554,116 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'toggl_create_project': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'creating a project');
+        const name = requireName(args?.name, 'name');
+
+        const payload = {
+          ...pickDefined<CreateProjectRequest>(args ?? {}, PROJECT_FIELDS),
+          name,
+        } as CreateProjectRequest;
+
+        const project = await api.createProject(workspaceId, payload);
+        cache.invalidateProjects(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Project created',
+          project,
+        });
+      }
+
+      case 'toggl_update_project': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'updating a project');
+        const projectId = requireId(args?.project_id, 'project_id');
+
+        const updates = pickDefined<UpdateProjectRequest>(args ?? {}, PROJECT_FIELDS);
+        if (Object.keys(updates).length === 0) {
+          throw new Error(
+            `Provide at least one field to update. Updatable fields: ${PROJECT_FIELDS.join(', ')}.`
+          );
+        }
+
+        const project = await api.updateProject(workspaceId, projectId, updates);
+        cache.invalidateProjects(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Project updated',
+          project,
+        });
+      }
+
+      case 'toggl_delete_project': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'deleting a project');
+        const projectId = requireId(args?.project_id, 'project_id');
+
+        await api.deleteProject(workspaceId, projectId);
+        cache.invalidateProjects(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Project deleted',
+          project_id: projectId,
+          workspace_id: workspaceId,
+        });
+      }
+
+      case 'toggl_create_client': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'creating a client');
+        const name = requireName(args?.name, 'name');
+
+        const payload = {
+          ...pickDefined<CreateClientRequest>(args ?? {}, ['name', 'notes']),
+          name,
+        } as CreateClientRequest;
+
+        const client = await api.createClient(workspaceId, payload);
+        cache.invalidateClients(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Client created',
+          client,
+        });
+      }
+
+      case 'toggl_update_client': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'updating a client');
+        const clientId = requireId(args?.client_id, 'client_id');
+
+        const updates = pickDefined<UpdateClientRequest>(args ?? {}, CLIENT_FIELDS);
+        if (Object.keys(updates).length === 0) {
+          throw new Error(
+            `Provide at least one field to update. Updatable fields: ${CLIENT_FIELDS.join(', ')}.`
+          );
+        }
+
+        const client = await api.updateClient(workspaceId, clientId, updates);
+        cache.invalidateClients(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Client updated',
+          client,
+        });
+      }
+
+      case 'toggl_delete_client': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'deleting a client');
+        const clientId = requireId(args?.client_id, 'client_id');
+
+        await api.deleteClient(workspaceId, clientId);
+        cache.invalidateClients(workspaceId);
+
+        return jsonResponse({
+          success: true,
+          message: 'Client deleted',
+          client_id: clientId,
+          workspace_id: workspaceId,
+        });
       }
 
       // Cache management

@@ -340,6 +340,29 @@ export class CacheManager {
     }
   }
 
+  // Drop cached project data for a workspace after a create/update/delete so the
+  // next read re-fetches instead of serving a stale list for the rest of the TTL.
+  invalidateProjects(workspaceId: number): void {
+    this.projectsByWorkspace.delete(workspaceId);
+    for (const [id, entry] of this.projects) {
+      if (entry.data.workspace_id === workspaceId) {
+        this.projects.delete(id);
+      }
+    }
+  }
+
+  // Same as invalidateProjects, for clients. Projects are invalidated too because
+  // a project's client_id/client_name can be orphaned by a client change.
+  invalidateClients(workspaceId: number): void {
+    this.clientsByWorkspace.delete(workspaceId);
+    for (const [id, entry] of this.clients) {
+      if (entry.data.workspace_id === workspaceId) {
+        this.clients.delete(id);
+      }
+    }
+    this.invalidateProjects(workspaceId);
+  }
+
   // Warm cache by pre-fetching common entities
   async warmCache(workspaceId?: number): Promise<void> {
     // Log to stderr to avoid interfering with MCP stdio protocol

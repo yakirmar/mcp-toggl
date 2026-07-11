@@ -7,11 +7,13 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Toggl API](https://img.shields.io/badge/Toggl-API%20v9-red)](https://developers.track.toggl.com/docs/)
 
-> **This is a fork** of [`@verygoodplugins/mcp-toggl`](https://github.com/verygoodplugins/mcp-toggl), published as `@yakirmar/mcp-toggl`. It adds full **write and cleanup** support for time entries — see [Fork Additions](#fork-additions).
+> **This is a fork** of [`@verygoodplugins/mcp-toggl`](https://github.com/verygoodplugins/mcp-toggl), published as `@yakirmar/mcp-toggl`. It makes the server **read-write**: upstream could only read data and start/stop timers, so you couldn't log past work, fix a bad entry, or manage projects and clients. See [Fork Additions](#fork-additions).
 
 ## Fork Additions
 
-Upstream can read entries and start/stop timers, but it cannot log past work or remove a mistaken entry. This fork adds three tools that close that loop:
+Upstream is essentially read-only: it reads entries, reports, and lists, and can start/stop a timer. It cannot log work you already did, remove a mistake, or create the project you want to track against. This fork adds **9 tools** that close those loops.
+
+### Time entries
 
 | Tool | Why it exists |
 | --- | --- |
@@ -19,9 +21,26 @@ Upstream can read entries and start/stop timers, but it cannot log past work or 
 | `toggl_search_entries` | Find entries (and, crucially, their `id`) by description, project name, client name, tag, time window, or duration. The `id` is what you need to delete something. |
 | `toggl_delete_entry` | Remove an entry by `id`. Pair with `toggl_search_entries` when you don't already know it. |
 
-Together these let you say things like *"log 2 hours on the Website project for yesterday's client call"* or *"find the duplicate standup entry from last week and delete it"*.
+### Projects and clients (full CRUD)
+
+Upstream could only *list* projects and clients. This fork adds create, update, and delete for both, so an assistant can set up and maintain your Toggl structure rather than just read it.
+
+| Tool | Why it exists |
+| --- | --- |
+| `toggl_create_project` | Create a project, optionally attached to a client, with billing, color, dates, and rate. |
+| `toggl_update_project` | Rename, recolor, re-bill, move to another client, or **archive** (`active: false`) a project. |
+| `toggl_delete_project` | Permanently remove a project. |
+| `toggl_create_client` | Create a client. |
+| `toggl_update_client` | Rename, annotate, or **archive** (`archived: true`) a client. |
+| `toggl_delete_client` | Permanently remove a client. |
+
+Together these let you say things like *"log 2 hours on the Website project for yesterday's client call"*, *"find the duplicate standup entry from last week and delete it"*, or *"create a Retainer project for Globex, billable at 150/hr"*.
 
 **Timezone handling:** datetimes accept an explicit offset (`2026-07-11T09:00:00Z`, `...+03:00`) for an absolute time. Without an offset — including a bare `YYYY-MM-DD` — the time is interpreted in **the timezone of the machine running the server**.
+
+**Archive vs delete:** deleting a project or client is irreversible and orphans the association on existing records (time entries lose their project; projects lose their client). Prefer archiving — `toggl_update_project` with `active: false`, or `toggl_update_client` with `archived: true` — when you want to keep history.
+
+**Cache coherence:** every project/client mutation invalidates the cached lists for that workspace, so a subsequent `toggl_list_projects` / `toggl_list_clients` reflects the change immediately instead of serving a stale list until the TTL expires.
 
 ## See What Your Week Actually Looked Like
 
@@ -66,6 +85,9 @@ Start a timer for "PR review" on the Platform project
 Log 2 hours yesterday on the Website project for "client call"
 Find the entries I logged for "standup" last week
 Delete the duplicate entry I created this morning
+Create a billable "Retainer" project for the Globex client at 150/hr
+Archive the old Website project
+Rename the client "Acme" to "Acme Corp"
 Show me yesterday's hours as a chart
 What apps did I use most today?
 Generate a daily report for last Friday
@@ -172,6 +194,21 @@ Added by this fork. See [Fork Additions](#fork-additions).
 | `toggl_list_workspaces` | Lists all accessible workspaces. |
 | `toggl_list_projects` | Lists projects for a workspace using cache-backed reads after first fetch. |
 | `toggl_list_clients` | Lists clients for a workspace using cache-backed reads after first fetch. |
+
+### Project and Client Management
+
+Added by this fork. See [Fork Additions](#fork-additions).
+
+| Tool | What it does |
+| --- | --- |
+| `toggl_create_project` | Creates a project. `name` is required; optional `client_id`, `active`, `is_private`, `billable`, `color`, `estimated_hours`, `start_date`, `end_date`, `currency`, `rate`. |
+| `toggl_update_project` | Updates a project by `project_id`. Supply at least one field; omitted fields are left untouched. Use `active: false` to archive. |
+| `toggl_delete_project` | Deletes a project by `project_id`. Irreversible — prefer archiving. |
+| `toggl_create_client` | Creates a client. `name` is required; optional `notes`. |
+| `toggl_update_client` | Updates a client by `client_id` (`name`, `notes`, `archived`). Supply at least one field. |
+| `toggl_delete_client` | Deletes a client by `client_id`. Irreversible — prefer archiving. |
+
+All six invalidate the workspace's cached project/client lists, so the next list read is fresh.
 
 ### Cache Management
 

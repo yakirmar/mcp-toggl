@@ -130,7 +130,7 @@ Build output lands in `dist/` (do not edit directly); `dist/index.js` is the CLI
 
 ## MCP Tools
 
-The server registers **19 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 19.) This list reflects v1.1.0 of this repo.
+The server registers **25 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 25.) This list reflects v1.1.0 of this repo.
 
 **Health / auth**
 1. **toggl_check_auth** — Verify API connectivity and auth; returns the (email-masked) user and accessible workspaces.
@@ -154,14 +154,20 @@ The server registers **19 tools**, all prefixed `toggl_`, defined in the `tools`
 13. **toggl_list_workspaces** — List all available workspaces.
 14. **toggl_list_projects** — List projects for a workspace.
 15. **toggl_list_clients** — List clients for a workspace.
+16. **toggl_create_project** — Create a project (`name` required; optional `client_id`, `active`, `is_private`, `billable`, `color`, `estimated_hours`, `start_date`, `end_date`, `currency`, `rate`).
+17. **toggl_update_project** — Update a project by `project_id`; supply at least one updatable field. Omitted fields are left untouched. `active: false` archives.
+18. **toggl_delete_project** — Delete a project by `project_id`. Irreversible; prefer archiving via `toggl_update_project`.
+19. **toggl_create_client** — Create a client (`name` required; optional `notes`).
+20. **toggl_update_client** — Update a client by `client_id`; supply at least one updatable field (`name`, `notes`, `archived`).
+21. **toggl_delete_client** — Delete a client by `client_id`. Irreversible; prefer archiving via `toggl_update_client`.
 
 **Cache management**
-16. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
-17. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
-18. **toggl_clear_cache** — Clear all cached data.
+22. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
+23. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
+24. **toggl_clear_cache** — Clear all cached data.
 
 **Timeline**
-19. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
+25. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
 
 ## Environment Variables
 
@@ -192,7 +198,7 @@ Loaded from the environment or a local `.env` file via `dotenv` (`config({ quiet
 
 **Dates are inclusive at the tool boundary** but Toggl's API treats `end_date` as exclusive. `parseInclusiveEndDate` (`src/index.ts:30`) adds one day, and all ranges are computed in **local** time via `parseLocalYMD`/`toLocalYMD` (`src/utils.ts`). Date inputs use `YYYY-MM-DD`.
 
-**Caching** (`src/cache-manager.ts`): in-memory TTL maps for workspaces/projects/clients/tasks/tags; `hydrateTimeEntries` attaches project/workspace names. On first tool use `ensureCache` (`src/index.ts:159`) pre-warms project/client/tag data **only when it can resolve a workspace** — `TOGGL_DEFAULT_WORKSPACE_ID`, or exactly one accessible workspace. With multiple workspaces and no default set, it marks the cache warmed without pre-fetching, so those entities are fetched lazily on the first tool that resolves a workspace.
+**Caching** (`src/cache-manager.ts`): in-memory TTL maps for workspaces/projects/clients/tasks/tags; `hydrateTimeEntries` attaches project/workspace names. Project/client **mutations must invalidate the cache** or reads serve a stale list for the rest of the TTL: the create/update/delete handlers call `cache.invalidateProjects(workspaceId)` / `cache.invalidateClients(workspaceId)` (the latter also invalidates projects, since a project's `client_id`/`client_name` can be orphaned by a client change). On first tool use `ensureCache` (`src/index.ts:159`) pre-warms project/client/tag data **only when it can resolve a workspace** — `TOGGL_DEFAULT_WORKSPACE_ID`, or exactly one accessible workspace. With multiple workspaces and no default set, it marks the cache warmed without pre-fetching, so those entities are fetched lazily on the first tool that resolves a workspace.
 
 **Error handling** (`src/toggl-api.ts`): `request()` retries transient/5xx/network errors with backoff but not 4xx (`noRetry`). 429 honors `Retry-After` (auto-retries only if the delay ≤ 30s, else throws `RATE_LIMITED`); 402 surfaces `TOGGL_QUOTA_LIMIT` with reset seconds. Tool handlers catch everything and return a structured `errorPayload` (never throw across the MCP boundary).
 
