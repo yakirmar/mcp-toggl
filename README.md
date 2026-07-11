@@ -40,7 +40,8 @@ Upstream can only ever see **your own** time, because every entry read goes thro
 
 | Tool | Why it exists |
 | --- | --- |
-| `toggl_list_users` | Who is in the workspace — id, name, email, admin/owner flags. |
+| `toggl_list_users` | Who is in a **workspace** — id, name, email, admin/owner flags. |
+| `toggl_list_org_users` | Who is in the **organization**, across every workspace — plus active status, role, org/workspace admin flags, and how many workspaces each member belongs to. |
 | `toggl_team_entries` | What everyone worked on. Cross-user entries filterable by `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, description, and duration. |
 | `toggl_team_summary` | Hours per user for a period — total, billable, and how many projects each person touched. |
 
@@ -231,9 +232,12 @@ Added by this fork. **Requires workspace admin rights** — see [Fork Additions]
 
 | Tool | What it does |
 | --- | --- |
-| `toggl_list_users` | Lists workspace members with id, name, email, and admin/owner flags. Use the ids as `user_ids` below. |
+| `toggl_list_users` | Lists **workspace** members with id, name, email, and admin/owner flags. Use the ids as `user_ids` below. |
+| `toggl_list_org_users` | Lists **organization** members across all workspaces, with active status, role, org/workspace admin flags, and workspace count. Supports `filter`, `active_status`, `only_admins`. Requires **org** admin. |
 | `toggl_team_entries` | Time entries across all users, via the Reports API. Filters: `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, `description`, `min_duration_minutes`, `max_duration_minutes`. Hydrated with user/project/client names, newest-first (`limit` default 100, max 1000). |
 | `toggl_team_summary` | Hours per user for the window — total, billable, entry count, and project count. Sorted by hours descending. |
+
+**Workspace vs organization:** use `toggl_list_users` when you care about one workspace, and `toggl_list_org_users` when you want everyone in the org. `toggl_list_org_users` returns both an `organization_user_id` and a `user_id` — **`user_id` is the one to pass as `user_ids`**, since that's what time entries are keyed by. `organization_id` is resolved from your workspaces automatically (or set `TOGGL_DEFAULT_ORG_ID`); if your workspaces span several orgs, the tool lists them and asks you to pick.
 
 **Date windows here are inclusive on both ends** (`start_date` … `end_date`), matching Toggl's Reports API, and default to the last 31 days.
 
@@ -295,6 +299,7 @@ When in doubt, use `include_events: false`.
 | `TOGGL_API_TOKEN` | No | - | Supported alias for backwards compatibility. `TOGGL_API_KEY` is preferred. |
 | `TOGGL_TOKEN` | No | - | Supported alias for backwards compatibility. `TOGGL_API_KEY` is preferred. |
 | `TOGGL_DEFAULT_WORKSPACE_ID` | No | - | Used when a tool requires a workspace and none is passed. |
+| `TOGGL_DEFAULT_ORG_ID` | No | - | Used by `toggl_list_org_users` when no `organization_id` is passed. Otherwise derived from your workspaces. |
 | `TOGGL_CACHE_TTL` | No | `3600000` | Cache TTL in milliseconds. Default is 1 hour. |
 | `TOGGL_CACHE_SIZE` | No | `1000` | Maximum cached entity budget. |
 | `TOGGL_BATCH_SIZE` | No | `100` | Batch size used by API pagination helpers. |

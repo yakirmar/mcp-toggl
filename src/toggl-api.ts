@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { toLocalYMD } from './utils.js';
+import { extractOrganizationUsers } from './organization.js';
 import type {
   Workspace,
   Project,
@@ -16,6 +17,8 @@ import type {
   CreateClientRequest,
   UpdateClientRequest,
   WorkspaceUser,
+  OrganizationUser,
+  OrganizationUsersParams,
   ReportSearchParams,
   ReportRow,
   TimelineEvent,
@@ -447,6 +450,47 @@ export class TogglAPI {
     const firstDayNextMonth = new Date(year, month + 1, 1);
 
     return this.getTimeEntriesForDateRange(firstDay, firstDayNextMonth);
+  }
+
+  // Organization methods. Require organization admin rights.
+  async getOrganization(organizationId: number): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>('GET', `/organizations/${organizationId}`);
+  }
+
+  // Members of an organization, across all its workspaces. Paginated via
+  // page/per_page; the envelope is not documented, so extraction is defensive.
+  async getOrganizationUsers(
+    organizationId: number,
+    params: OrganizationUsersParams = {}
+  ): Promise<OrganizationUser[]> {
+    const perPage = params.per_page ?? TogglAPI.PAGE_SIZE;
+    const all: OrganizationUser[] = [];
+
+    for (let page = params.page ?? 1; page <= TogglAPI.MAX_PAGES; page++) {
+      const query = new URLSearchParams();
+      query.set('per_page', String(perPage));
+      query.set('page', String(page));
+      if (params.filter) query.set('filter', params.filter);
+      if (params.active_status) query.set('active_status', params.active_status);
+      if (params.only_admins !== undefined) query.set('only_admins', String(params.only_admins));
+      if (params.sort_dir) query.set('sort_dir', params.sort_dir);
+
+      const payload = await this.request<unknown>(
+        'GET',
+        `/organizations/${organizationId}/users?${query.toString()}`
+      );
+
+      const batch = extractOrganizationUsers(payload);
+      if (batch.length === 0) break;
+
+      all.push(...batch);
+      if (batch.length < perPage) break;
+
+      // A single explicit page was requested — do not keep walking.
+      if (params.page !== undefined) break;
+    }
+
+    return all;
   }
 
   // Workspace members. Requires admin rights on the workspace; non-admin tokens

@@ -120,12 +120,13 @@ src/
 ├── cache-manager.ts    # CacheManager: in-memory TTL cache for workspaces/projects/clients/tasks/tags; warmCache, hydrateTimeEntries, stats
 ├── workspace.ts        # resolveWorkspaceId / parseWorkspaceId; WorkspaceResolutionError when workspace is ambiguous
 ├── timeline.ts         # buildTimelineResponse: filters/clips/redacts Toggl Desktop timeline events, builds per-app summary
+├── organization.ts     # resolveOrganizationId / parseOrganizationId (OrganizationResolutionError); extractOrganizationUsers + normalizeOrganizationUser for the org users endpoint
 ├── reports.ts          # normalizeReportRows / summarizeByUser / userDisplayName: defensively flattens Reports API v3 rows (schema is unpublished) into per-user team entries and summaries
 ├── utils.ts            # Date helpers (local YMD parse/format, period→range, reportDateWindow), report generators, grouping, duration formatting, pickDefined
 └── types.ts            # TypeScript interfaces (TimeEntry, Workspace, Project, CacheConfig, TimelineEvent, WorkspaceUser, ReportRow, TeamEntry, etc.)
 
 scripts/setup.js        # One-time local setup CLI (npm run setup)
-tests/                  # Vitest suites (cache-manager, reports, timeline, toggl-api, utils, workspace, stdio-smoke)
+tests/                  # Vitest suites (cache-manager, organization, reports, timeline, toggl-api, utils, workspace, stdio-smoke)
 server.json             # MCP registry manifest (mirrors the tool names; version kept in sync by Release Please)
 ```
 
@@ -133,7 +134,7 @@ Build output lands in `dist/` (do not edit directly); `dist/index.js` is the CLI
 
 ## MCP Tools
 
-The server registers **28 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 28.) This list reflects v1.1.0 of this repo.
+The server registers **29 tools**, all prefixed `toggl_`, defined in the `tools` array in `src/index.ts` and dispatched by the `CallToolRequestSchema` switch. (`server.json` lists the same 29.) This list reflects v1.1.0 of this repo.
 
 **Health / auth**
 1. **toggl_check_auth** — Verify API connectivity and auth; returns the (email-masked) user and accessible workspaces.
@@ -167,16 +168,17 @@ The server registers **28 tools**, all prefixed `toggl_`, defined in the `tools`
 **Cache management**
 **Team / admin (workspace-wide, require admin rights)**
 22. **toggl_list_users** — Workspace members (id, name, email, admin/owner flags). Admin-only; non-admin tokens typically get 403.
-23. **toggl_team_entries** — Time entries for *other* users via the **Reports API v3** (`/reports/api/v3/workspace/{id}/search/time_entries`). `/me/time_entries` is self-scoped, so this is the only way to read other users' entries. Filters: `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, `description`, `min`/`max_duration_minutes`. Hydrated with user/project/client names, newest-first, `limit` default 100.
-24. **toggl_team_summary** — Hours per user (total, billable, project count) for the window. Derived by aggregating the detailed report, not the separate summary endpoint.
+23. **toggl_list_org_users** — Organization members **across all workspaces** (org/workspace admin flags, active status, role, workspace count). Org-admin only. `organization_id` resolves via arg → `TOGGL_DEFAULT_ORG_ID` → the sole org derivable from your workspaces (`Workspace.organization_id`), else `OrganizationResolutionError` (`code: ORGANIZATION_REQUIRED`). Returns the Toggl `user_id` (not the org-user `id`) — that is what time entries are keyed by.
+24. **toggl_team_entries** — Time entries for *other* users via the **Reports API v3** (`/reports/api/v3/workspace/{id}/search/time_entries`). `/me/time_entries` is self-scoped, so this is the only way to read other users' entries. Filters: `user_ids`, `project_ids`, `client_ids`, `tag_ids`, `billable`, `description`, `min`/`max_duration_minutes`. Hydrated with user/project/client names, newest-first, `limit` default 100.
+25. **toggl_team_summary** — Hours per user (total, billable, project count) for the window. Derived by aggregating the detailed report, not the separate summary endpoint.
 
 **Cache management**
-25. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
-26. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
-27. **toggl_clear_cache** — Clear all cached data.
+26. **toggl_warm_cache** — Pre-fetch and cache workspace, project, client, and tag data.
+27. **toggl_cache_stats** — Cache statistics and hit-rate metrics.
+28. **toggl_clear_cache** — Clear all cached data.
 
 **Timeline**
-28. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
+29. **toggl_get_timeline** — Toggl Desktop activity timeline (app usage). `period` or `start_date`/`end_date`, `app` filter, `include_events` (default true), `redact_titles` (default false; nulls window titles), `limit` (default 50, max 1000; affects the events array only, never the summary). **Privacy:** raw events include window titles that may contain sensitive content — use `include_events: false` or `redact_titles: true` for privacy-conscious use. Returns `enabled: false` with guidance if Toggl Desktop timeline sync is not enabled.
 
 ## Environment Variables
 
@@ -194,7 +196,8 @@ Loaded from the environment or a local `.env` file via `dotenv` (`config({ quiet
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TOGGL_DEFAULT_WORKSPACE_ID` | unset (`undefined`) | Default workspace for tools that need one (`src/index.ts:148`). |
+| `TOGGL_DEFAULT_WORKSPACE_ID` | unset (`undefined`) | Default workspace for tools that need one. |
+| `TOGGL_DEFAULT_ORG_ID` | unset (`undefined`) | Default organization for `toggl_list_org_users`. |
 | `TOGGL_CACHE_TTL` | `3600000` (ms = 1h) | Cache time-to-live (`src/index.ts:143`). |
 | `TOGGL_CACHE_SIZE` | `1000` | Max cached entities (`src/index.ts:144`). |
 | `TOGGL_BATCH_SIZE` | `100` | Entries fetched per request (`src/index.ts:145`). |

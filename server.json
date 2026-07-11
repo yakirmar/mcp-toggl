@@ -109,6 +109,10 @@
       "description": "List workspace members (admin only)"
     },
     {
+      "name": "toggl_list_org_users",
+      "description": "List organization members across workspaces (org admin only)"
+    },
+    {
       "name": "toggl_team_entries",
       "description": "Get time entries across all users in the workspace via the Reports API (admin only)"
     },

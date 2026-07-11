@@ -386,3 +386,61 @@ describe('team / admin endpoints', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('organization endpoints', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('GETs org users with the documented query params', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ status: 200, json: [{ id: 1, user_id: 42, name: 'Jane' }] })
+    );
+
+    const api = new TogglAPI('token');
+    const users = await api.getOrganizationUsers(900, { filter: 'jane', only_admins: true });
+
+    expect(users).toHaveLength(1);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('/organizations/900/users?');
+    expect(url).toContain('filter=jane');
+    expect(url).toContain('only_admins=true');
+    expect(url).toContain('per_page=200');
+  });
+
+  it('unwraps a { data: [...] } envelope', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ status: 200, json: { data: [{ id: 1, user_id: 42 }] } })
+    );
+
+    const api = new TogglAPI('token');
+    await expect(api.getOrganizationUsers(900)).resolves.toHaveLength(1);
+  });
+
+  it('pages until a short page is returned', async () => {
+    const page = (count: number, start: number) =>
+      Array.from({ length: count }, (_, i) => ({ id: start + i, user_id: start + i }));
+
+    fetchMock
+      .mockResolvedValueOnce(response({ status: 200, json: page(200, 1) }))
+      .mockResolvedValueOnce(response({ status: 200, json: page(5, 1000) }));
+
+    const api = new TogglAPI('token');
+    const users = await api.getOrganizationUsers(900);
+
+    expect(users).toHaveLength(205);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not walk pages when an explicit page is requested', async () => {
+    const page = (count: number) => Array.from({ length: count }, (_, i) => ({ id: i, user_id: i }));
+    fetchMock.mockResolvedValue(response({ status: 200, json: page(200) }));
+
+    const api = new TogglAPI('token');
+    const users = await api.getOrganizationUsers(900, { page: 2 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(users).toHaveLength(200);
+    expect(fetchMock.mock.calls[0][0]).toContain('page=2');
+  });
+});

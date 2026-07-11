@@ -18,6 +18,12 @@ import {
   resolveProjectForClient,
 } from './workspace.js';
 import {
+  OrganizationResolutionError,
+  parseOrganizationId,
+  resolveOrganizationId,
+  normalizeOrganizationUser,
+} from './organization.js';
+import {
   buildTimeEntryInterval,
   filterHydratedEntries,
   pickDefined,
@@ -124,6 +130,12 @@ function errorPayload(error: unknown): Record<string, unknown> {
     payload.available_workspaces = error.available_workspaces;
   }
 
+  if (error instanceof OrganizationResolutionError) {
+    payload.code = error.code;
+    payload.tip = error.tip;
+    payload.available_organizations = error.available_organizations;
+  }
+
   return payload;
 }
 
@@ -199,6 +211,7 @@ const cacheConfig: CacheConfig = {
 };
 
 const defaultWorkspaceId = parseWorkspaceId(process.env.TOGGL_DEFAULT_WORKSPACE_ID);
+const defaultOrganizationId = parseOrganizationId(process.env.TOGGL_DEFAULT_ORG_ID);
 
 // Initialize API and cache
 const api = new TogglAPI(API_KEY);
@@ -232,6 +245,18 @@ async function resolveWorkspaceForTool(
   return resolveWorkspaceId({
     explicitWorkspaceId: args?.workspace_id,
     defaultWorkspaceId,
+    getWorkspaces: () => cache.getWorkspaces(),
+    action,
+  });
+}
+
+async function resolveOrganizationForTool(
+  args: Record<string, unknown> | undefined,
+  action: string
+): Promise<number> {
+  return resolveOrganizationId({
+    explicitOrganizationId: args?.organization_id,
+    defaultOrganizationId,
     getWorkspaces: () => cache.getWorkspaces(),
     action,
   });
@@ -955,6 +980,38 @@ const tools: Tool[] = [
           type: 'number',
           description:
             'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+      },
+    },
+  },
+  {
+    name: 'toggl_list_org_users',
+    description:
+      'List the members of an ORGANIZATION (across all its workspaces), with richer data than toggl_list_users: org/workspace admin flags, active status, role, and how many workspaces each member belongs to. ORG ADMIN ONLY. If organization_id is omitted it is derived from your workspaces (or TOGGL_DEFAULT_ORG_ID). Use the returned user_id values as user_ids for toggl_team_entries / toggl_team_summary. Prefer toggl_list_users when you only care about one workspace.',
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        organization_id: {
+          type: 'number',
+          description:
+            'Organization ID. If omitted, uses TOGGL_DEFAULT_ORG_ID or the only organization derivable from your workspaces.',
+        },
+        filter: {
+          type: 'string',
+          description: 'Free-text filter on name/email, applied by Toggl.',
+        },
+        active_status: {
+          type: 'string',
+          description: 'Filter by active status as supported by Toggl, e.g. "active" or "inactive".',
+        },
+        only_admins: {
+          type: 'boolean',
+          description: 'Return only organization admins.',
         },
       },
     },
@@ -1901,6 +1958,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             owner: user.owner,
             active: user.active,
           })),
+        });
+      }
+
+      case 'toggl_list_org_users': {
+        const organizationId = await resolveOrganizationForTool(
+          args,
+          'listing organization users'
+        );
+
+        const users = await api.getOrganizationUsers(organizationId, {
+          filter: args?.filter as string | undefined,
+          active_status: args?.active_status as string | undefined,
+          only_admins: args?.only_admins as boolean | undefined,
+        });
+
+        return jsonResponse({
+          organization_id: organizationId,
+          count: users.length,
+          users: users.map(normalizeOrganizationUser),
         });
       }
 

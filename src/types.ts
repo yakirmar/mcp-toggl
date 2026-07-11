@@ -277,6 +277,35 @@ export interface WorkspaceUser {
   at?: string;
 }
 
+// A member of an organization (GET /organizations/{id}/users). Spans workspaces,
+// unlike WorkspaceUser. Response fields are treated as optional and normalized.
+export interface OrganizationUser {
+  id?: number; // organization-user id (used by the org user endpoints)
+  user_id?: number; // Toggl user id (matches time entry user_id)
+  name?: string;
+  fullname?: string;
+  email?: string;
+  admin?: boolean;
+  organization_admin?: boolean;
+  workspace_admin?: boolean;
+  inactive?: boolean;
+  joined?: boolean;
+  role_id?: number;
+  two_factor_enabled?: boolean;
+  workspaces?: unknown[];
+  groups?: unknown[];
+  [key: string]: unknown;
+}
+
+export interface OrganizationUsersParams {
+  filter?: string; // free-text name/email filter
+  active_status?: string; // e.g. active | inactive | all
+  only_admins?: boolean;
+  page?: number;
+  per_page?: number;
+  sort_dir?: string;
+}
+
 // Filters accepted by the Reports API v3 detailed search endpoint.
 // NOTE: unlike the core v9 API, Reports API dates are INCLUSIVE.
 export interface ReportSearchParams {
