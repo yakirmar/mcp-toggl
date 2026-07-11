@@ -68,6 +68,80 @@ export function parseLocalYMD(value: string): Date {
   return date;
 }
 
+// Resolved interval for a completed time entry.
+export interface TimeEntryInterval {
+  start: string; // ISO 8601 datetime
+  stop: string; // ISO 8601 datetime
+  duration: number; // Seconds, always positive
+}
+
+function parseDateTime(value: unknown, field: string): Date {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${field} must be an ISO 8601 datetime string`);
+  }
+
+  const trimmed = value.trim();
+
+  // A bare YYYY-MM-DD is treated as local midnight (consistent with the rest of
+  // the codebase). `new Date('YYYY-MM-DD')` would parse it as UTC midnight, which
+  // shifts the entry a day in timezones behind/ahead of UTC.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return parseLocalYMD(trimmed);
+  }
+
+  // Datetimes with an offset (Z or ±hh:mm) are absolute; datetimes without one
+  // are interpreted in the host's local timezone by the Date constructor.
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(
+      `Invalid ${field}: ${value}. Expected an ISO 8601 datetime ` +
+        `(e.g. 2026-07-11T09:00:00Z or 2026-07-11T09:00:00+03:00).`
+    );
+  }
+
+  return date;
+}
+
+// Build a completed time entry interval from a start plus exactly one of an end
+// time or a length in minutes. Returns ISO 8601 start/stop and positive duration
+// seconds, matching what Toggl's create time entry endpoint expects.
+export function buildTimeEntryInterval(args: {
+  start?: unknown;
+  end?: unknown;
+  duration_minutes?: unknown;
+}): TimeEntryInterval {
+  const start = parseDateTime(args.start, 'start');
+
+  const hasEnd = args.end !== undefined && args.end !== null && args.end !== '';
+  const hasDuration = args.duration_minutes !== undefined && args.duration_minutes !== null;
+
+  if (hasEnd === hasDuration) {
+    throw new Error('Provide exactly one of end or duration_minutes.');
+  }
+
+  let stop: Date;
+  if (hasEnd) {
+    stop = parseDateTime(args.end, 'end');
+  } else {
+    const minutes = args.duration_minutes;
+    if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0) {
+      throw new Error('duration_minutes must be a positive number.');
+    }
+    stop = new Date(start.getTime() + minutes * 60_000);
+  }
+
+  const duration = Math.round((stop.getTime() - start.getTime()) / 1000);
+  if (duration <= 0) {
+    throw new Error('end must be after start.');
+  }
+
+  return {
+    start: start.toISOString(),
+    stop: stop.toISOString(),
+    duration,
+  };
+}
+
 export function isDatePeriod(value: unknown): value is DatePeriod {
   return (
     value === 'today' ||

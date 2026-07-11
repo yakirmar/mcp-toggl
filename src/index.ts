@@ -10,8 +10,14 @@ import { config } from 'dotenv';
 import { TogglAPI, TimelineNotEnabledError, TogglAPIError } from './toggl-api.js';
 import { buildTimelineResponse } from './timeline.js';
 import { CacheManager } from './cache-manager.js';
-import { WorkspaceResolutionError, parseWorkspaceId, resolveWorkspaceId } from './workspace.js';
 import {
+  WorkspaceResolutionError,
+  parseWorkspaceId,
+  resolveWorkspaceId,
+  resolveProjectForClient,
+} from './workspace.js';
+import {
+  buildTimeEntryInterval,
   getDateRange,
   generateDailyReport,
   generateWeeklyReport,
@@ -313,6 +319,67 @@ const tools: Tool[] = [
       type: 'object',
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: 'toggl_create_entry',
+    description:
+      'Create a completed (past) time entry for a project, optionally scoped to a client, with a start time and either an end time or a length in minutes. ' +
+      'Times are ISO 8601 datetimes: use Z or an offset (2026-07-11T09:00:00Z / 2026-07-11T09:00:00+03:00) for an absolute time, omit the offset for the host local timezone, or pass a bare YYYY-MM-DD for local midnight. ' +
+      'Provide exactly one of end or duration_minutes. Use toggl_start_timer instead to begin a currently-running timer.',
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Description of the time entry',
+        },
+        workspace_id: {
+          type: 'number',
+          description:
+            'Workspace ID. If omitted, uses TOGGL_DEFAULT_WORKSPACE_ID or the only available workspace; required when multiple workspaces exist.',
+        },
+        project_id: {
+          type: 'number',
+          description: 'Project to attach the entry to (optional).',
+        },
+        client_id: {
+          type: 'number',
+          description:
+            'Client to attach the entry to (optional). Toggl entries attach to a project, not a client directly: when set without project_id the client must have exactly one project; when both are set the project must belong to this client.',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID (optional).',
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags for the entry',
+        },
+        billable: {
+          type: 'boolean',
+          description: 'Whether the entry is billable (optional).',
+        },
+        start: {
+          type: 'string',
+          description: 'Start time as an ISO 8601 datetime (required).',
+        },
+        end: {
+          type: 'string',
+          description: 'End time as an ISO 8601 datetime. Provide this or duration_minutes.',
+        },
+        duration_minutes: {
+          type: 'number',
+          description: 'Length of the entry in minutes. Provide this or end.',
+        },
+      },
+      required: ['start'],
     },
   },
 
@@ -770,6 +837,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 {
                   success: true,
                   message: 'Timer stopped',
+                  entry: hydrated[0],
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      case 'toggl_create_entry': {
+        const workspaceId = await resolveWorkspaceForTool(args, 'creating a time entry');
+
+        let projectId = args?.project_id as number | undefined;
+        const clientId = args?.client_id as number | undefined;
+        if (clientId !== undefined) {
+          const projects = await cache.getProjects(workspaceId);
+          projectId = resolveProjectForClient(projects, clientId, projectId);
+        }
+
+        const { start, stop, duration } = buildTimeEntryInterval({
+          start: args?.start,
+          end: args?.end,
+          duration_minutes: args?.duration_minutes,
+        });
+
+        const created = await api.createTimeEntry(workspaceId, {
+          description: args?.description as string | undefined,
+          project_id: projectId,
+          task_id: args?.task_id as number | undefined,
+          tags: args?.tags as string[] | undefined,
+          billable: args?.billable as boolean | undefined,
+          start,
+          stop,
+          duration,
+        });
+
+        await ensureCache();
+        const hydrated = await cache.hydrateTimeEntries([created]);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  success: true,
+                  message: 'Time entry created',
                   entry: hydrated[0],
                 },
                 null,

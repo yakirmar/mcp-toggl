@@ -1,4 +1,4 @@
-import type { Workspace } from './types.js';
+import type { Project, Workspace } from './types.js';
 
 export interface WorkspaceSummary {
   id: number;
@@ -53,6 +53,48 @@ export async function resolveWorkspaceId({
       id: workspace.id,
       name: workspace.name,
     }))
+  );
+}
+
+function formatProjectList(projects: Project[]): string {
+  return projects.map((project) => `${project.id} (${project.name})`).join(', ');
+}
+
+// Resolve which project a time entry should attach to when a client is given.
+// Toggl entries attach to a project, not a client directly, so this maps the
+// requested client to a concrete project:
+//   - project_id given  → verify it belongs to the client
+//   - exactly one project for the client → use it
+//   - zero or many → throw with actionable guidance
+export function resolveProjectForClient(
+  projects: Project[],
+  clientId: number,
+  projectId?: number
+): number {
+  const clientProjects = projects.filter((project) => project.client_id === clientId);
+
+  if (projectId !== undefined) {
+    if (!clientProjects.some((project) => project.id === projectId)) {
+      throw new Error(
+        `Project ${projectId} does not belong to client ${clientId}. ` +
+          `Projects for this client: ${clientProjects.length ? formatProjectList(clientProjects) : 'none'}.`
+      );
+    }
+    return projectId;
+  }
+
+  if (clientProjects.length === 1) return clientProjects[0]!.id;
+
+  if (clientProjects.length === 0) {
+    throw new Error(
+      `No projects found for client ${clientId}. Provide project_id, ` +
+        `or create a project for this client first.`
+    );
+  }
+
+  throw new Error(
+    `Client ${clientId} has multiple projects; specify project_id. ` +
+      `Candidates: ${formatProjectList(clientProjects)}.`
   );
 }
 

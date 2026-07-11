@@ -41,6 +41,10 @@
       "description": "Stop the currently running timer"
     },
     {
+      "name": "toggl_create_entry",
+      "description": "Create a completed time entry for a project/client with a start and end or length"
+    },
+    {
       "name": "toggl_daily_report",
       "description": "Generate a daily report with project and workspace breakdowns"
     },

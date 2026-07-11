@@ -2,6 +2,7 @@ process.env.TZ = 'Europe/London';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildTimeEntryInterval,
   generateWeeklyReport,
   formatDuration,
   getDateRange,
@@ -99,5 +100,148 @@ describe('local date ranges', () => {
 
     expect(report.daily_breakdown).toHaveLength(1);
     expect(report.daily_breakdown[0]?.date).toBe('2026-04-19');
+  });
+});
+
+describe('buildTimeEntryInterval', () => {
+  it('derives stop and duration from a start and duration_minutes', () => {
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00Z',
+      duration_minutes: 90,
+    });
+
+    expect(interval).toEqual({
+      start: '2026-07-11T09:00:00.000Z',
+      stop: '2026-07-11T10:30:00.000Z',
+      duration: 5400,
+    });
+  });
+
+  it('derives duration from a start and end time', () => {
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00Z',
+      end: '2026-07-11T09:45:00Z',
+    });
+
+    expect(interval).toEqual({
+      start: '2026-07-11T09:00:00.000Z',
+      stop: '2026-07-11T09:45:00.000Z',
+      duration: 2700,
+    });
+  });
+
+  it('treats a bare YYYY-MM-DD as local midnight (Europe/London), not UTC', () => {
+    // Europe/London is UTC+1 (BST) in July, so local midnight is 23:00 UTC the prior day.
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11',
+      duration_minutes: 60,
+    });
+
+    expect(interval.start).toBe('2026-07-10T23:00:00.000Z');
+    expect(interval.stop).toBe('2026-07-11T00:00:00.000Z');
+    expect(interval.duration).toBe(3600);
+  });
+
+  it('interprets an offset-less datetime in the host local timezone (Europe/London BST)', () => {
+    // 09:00 local in BST (UTC+1) is 08:00 UTC — no offset means "the computer's timezone".
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00',
+      duration_minutes: 60,
+    });
+
+    expect(interval.start).toBe('2026-07-11T08:00:00.000Z');
+    expect(interval.stop).toBe('2026-07-11T09:00:00.000Z');
+  });
+
+  it('honors an explicit timezone offset', () => {
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00+03:00',
+      duration_minutes: 30,
+    });
+
+    expect(interval.start).toBe('2026-07-11T06:00:00.000Z');
+    expect(interval.stop).toBe('2026-07-11T06:30:00.000Z');
+  });
+
+  it('requires exactly one of end or duration_minutes', () => {
+    expect(() => buildTimeEntryInterval({ start: '2026-07-11T09:00:00Z' })).toThrow(
+      /exactly one of end or duration_minutes/
+    );
+    expect(() =>
+      buildTimeEntryInterval({
+        start: '2026-07-11T09:00:00Z',
+        end: '2026-07-11T10:00:00Z',
+        duration_minutes: 60,
+      })
+    ).toThrow(/exactly one of end or duration_minutes/);
+  });
+
+  it('rejects a non-positive duration and an end before start', () => {
+    expect(() =>
+      buildTimeEntryInterval({ start: '2026-07-11T09:00:00Z', duration_minutes: 0 })
+    ).toThrow(/positive number/);
+    expect(() =>
+      buildTimeEntryInterval({
+        start: '2026-07-11T10:00:00Z',
+        end: '2026-07-11T09:00:00Z',
+      })
+    ).toThrow(/end must be after start/);
+  });
+
+  it('rejects invalid or missing start', () => {
+    expect(() => buildTimeEntryInterval({ duration_minutes: 60 })).toThrow(
+      /start must be an ISO 8601 datetime/
+    );
+    expect(() =>
+      buildTimeEntryInterval({ start: 'not-a-date', duration_minutes: 60 })
+    ).toThrow(/Invalid start/);
+  });
+
+  it('rejects a blank start string', () => {
+    expect(() => buildTimeEntryInterval({ start: '   ', duration_minutes: 60 })).toThrow(
+      /start must be an ISO 8601 datetime/
+    );
+  });
+
+  it('treats an empty-string end as not provided and falls back to duration_minutes', () => {
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00Z',
+      end: '',
+      duration_minutes: 15,
+    });
+
+    expect(interval.stop).toBe('2026-07-11T09:15:00.000Z');
+    expect(interval.duration).toBe(900);
+  });
+
+  it('rejects a non-numeric duration_minutes', () => {
+    expect(() =>
+      buildTimeEntryInterval({ start: '2026-07-11T09:00:00Z', duration_minutes: '30' })
+    ).toThrow(/positive number/);
+  });
+
+  it('rejects an invalid end datetime', () => {
+    expect(() =>
+      buildTimeEntryInterval({ start: '2026-07-11T09:00:00Z', end: 'nonsense' })
+    ).toThrow(/Invalid end/);
+  });
+
+  it('rounds sub-second precision to whole seconds', () => {
+    const interval = buildTimeEntryInterval({
+      start: '2026-07-11T09:00:00.000Z',
+      end: '2026-07-11T09:00:30.400Z',
+    });
+
+    expect(interval.duration).toBe(30);
+  });
+
+  it('trims surrounding whitespace on datetimes', () => {
+    const interval = buildTimeEntryInterval({
+      start: '  2026-07-11T09:00:00Z  ',
+      duration_minutes: 10,
+    });
+
+    expect(interval.start).toBe('2026-07-11T09:00:00.000Z');
+    expect(interval.stop).toBe('2026-07-11T09:10:00.000Z');
   });
 });

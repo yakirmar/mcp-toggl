@@ -94,3 +94,119 @@ describe.skipIf(!existsSync(entryPoint))('stdio smoke checks', () => {
     }
   });
 });
+
+describe.skipIf(!existsSync(entryPoint))('toggl_create_entry over stdio', () => {
+  async function withClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
+    const client = new Client({ name: 'mcp-toggl-test', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [entryPoint],
+      env: {
+        ...process.env,
+        TOGGL_API_KEY: 'dummy-token',
+        TOGGL_API_TOKEN: '',
+        TOGGL_TOKEN: '',
+      },
+    });
+
+    await client.connect(transport);
+    try {
+      return await run(client);
+    } finally {
+      await client.close();
+    }
+  }
+
+  async function callCreateEntry(
+    client: Client,
+    args: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const result = await client.callTool({ name: 'toggl_create_entry', arguments: args });
+    const content = result.content as Array<{ text?: string }> | undefined;
+    return JSON.parse(content?.[0]?.text ?? '{}') as Record<string, unknown>;
+  }
+
+  it('registers the tool with start required and project/client/duration inputs', async () => {
+    await withClient(async (client) => {
+      const tools = await client.listTools();
+      const tool = tools.tools.find((t) => t.name === 'toggl_create_entry');
+
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema.required).toEqual(['start']);
+
+      const properties = tool?.inputSchema.properties as Record<string, unknown> | undefined;
+      for (const key of [
+        'description',
+        'workspace_id',
+        'project_id',
+        'client_id',
+        'task_id',
+        'tags',
+        'billable',
+        'start',
+        'end',
+        'duration_minutes',
+      ]) {
+        expect(properties).toHaveProperty(key);
+      }
+    });
+  });
+
+  it('rejects supplying both end and duration_minutes', async () => {
+    await withClient(async (client) => {
+      // Explicit workspace_id keeps resolution offline so only interval validation runs.
+      const payload = await callCreateEntry(client, {
+        workspace_id: 123,
+        start: '2026-07-11T09:00:00Z',
+        end: '2026-07-11T10:00:00Z',
+        duration_minutes: 60,
+      });
+
+      expect(payload.error).toBe(true);
+      expect(payload.message).toContain('exactly one of end or duration_minutes');
+    });
+  });
+
+  it('rejects supplying neither end nor duration_minutes', async () => {
+    await withClient(async (client) => {
+      const payload = await callCreateEntry(client, {
+        workspace_id: 123,
+        start: '2026-07-11T09:00:00Z',
+      });
+
+      expect(payload.error).toBe(true);
+      expect(payload.message).toContain('exactly one of end or duration_minutes');
+    });
+  });
+
+  it('rejects an invalid start datetime', async () => {
+    await withClient(async (client) => {
+      const payload = await callCreateEntry(client, {
+        workspace_id: 123,
+        start: 'not-a-datetime',
+        duration_minutes: 60,
+      });
+
+      expect(payload.error).toBe(true);
+      expect(payload.message).toContain('Invalid start');
+    });
+  });
+
+  it('rejects an end that precedes start without leaking internals', async () => {
+    await withClient(async (client) => {
+      const payload = await callCreateEntry(client, {
+        workspace_id: 123,
+        start: '2026-07-11T10:00:00Z',
+        end: '2026-07-11T09:00:00Z',
+      });
+
+      expect(payload.error).toBe(true);
+      expect(payload.message).toContain('end must be after start');
+
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain('/Users/');
+      expect(serialized).not.toContain('dist/index.js');
+      expect(serialized).not.toContain('at ');
+    });
+  });
+});

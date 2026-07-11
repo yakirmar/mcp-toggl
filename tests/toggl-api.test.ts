@@ -66,6 +66,62 @@ describe('toggl api errors', () => {
   });
 });
 
+describe('createTimeEntry', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('POSTs a completed entry with created_with and the provided interval', async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({ status: 200, json: { id: 55, workspace_id: 42, project_id: 7 } })
+    );
+
+    const api = new TogglAPI('token');
+    const entry = await api.createTimeEntry(42, {
+      description: 'Focus block',
+      project_id: 7,
+      tags: ['deep-work'],
+      billable: true,
+      start: '2026-07-11T09:00:00.000Z',
+      stop: '2026-07-11T10:30:00.000Z',
+      duration: 5400,
+    });
+
+    expect(entry).toMatchObject({ id: 55, workspace_id: 42 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+    expect(url).toContain('/workspaces/42/time_entries');
+    expect(init.method).toBe('POST');
+
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      workspace_id: 42,
+      created_with: 'mcp-toggl',
+      description: 'Focus block',
+      project_id: 7,
+      tags: ['deep-work'],
+      billable: true,
+      start: '2026-07-11T09:00:00.000Z',
+      stop: '2026-07-11T10:30:00.000Z',
+      duration: 5400,
+    });
+  });
+
+  it('defaults start to now when the caller omits it', async () => {
+    fetchMock.mockResolvedValueOnce(response({ status: 200, json: { id: 1, workspace_id: 42 } }));
+
+    const api = new TogglAPI('token');
+    await api.createTimeEntry(42, { description: 'No explicit start' });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: string }];
+    const body = JSON.parse(init.body) as Record<string, unknown>;
+    expect(typeof body.start).toBe('string');
+    // A valid ISO 8601 timestamp was filled in.
+    expect(Number.isNaN(Date.parse(body.start as string))).toBe(false);
+  });
+});
+
 describe('list endpoint pagination', () => {
   afterEach(() => {
     fetchMock.mockReset();
