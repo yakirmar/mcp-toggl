@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   OrganizationResolutionError,
   extractOrganizationUsers,
-  normalizeOrganizationUser,
   organizationIdsFromWorkspaces,
   parseOrganizationId,
   resolveOrganizationId,
@@ -107,45 +106,5 @@ describe('extractOrganizationUsers', () => {
     expect(extractOrganizationUsers(null)).toEqual([]);
     expect(extractOrganizationUsers({ error: 'forbidden' })).toEqual([]);
     expect(extractOrganizationUsers('nope')).toEqual([]);
-  });
-});
-
-describe('normalizeOrganizationUser', () => {
-  it('exposes the Toggl user_id, which is what time entries are keyed by', () => {
-    const normalized = normalizeOrganizationUser({
-      id: 999, // organization-user id, NOT the time-entry user id
-      user_id: 42,
-      name: 'Jane',
-      email: 'jane@example.com',
-      organization_admin: true,
-      workspaces: [{}, {}],
-    });
-
-    expect(normalized).toMatchObject({
-      organization_user_id: 999,
-      user_id: 42,
-      name: 'Jane',
-      email: 'jane@example.com',
-      organization_admin: true,
-      workspace_admin: false,
-      active: true,
-      workspace_count: 2,
-    });
-  });
-
-  it('treats a missing inactive flag as active, and inactive: true as not active', () => {
-    expect(normalizeOrganizationUser({ user_id: 1 }).active).toBe(true);
-    expect(normalizeOrganizationUser({ user_id: 1, inactive: true }).active).toBe(false);
-    expect(normalizeOrganizationUser({ user_id: 1, inactive: false }).active).toBe(true);
-  });
-
-  it('falls back through name, fullname, email, then a synthetic label', () => {
-    expect(normalizeOrganizationUser({ user_id: 1, fullname: 'Jane Doe' }).name).toBe('Jane Doe');
-    expect(normalizeOrganizationUser({ user_id: 1, email: 'j@e.com' }).name).toBe('j@e.com');
-    expect(normalizeOrganizationUser({ user_id: 7 }).name).toBe('User 7');
-  });
-
-  it('accepts admin as an alias for organization_admin', () => {
-    expect(normalizeOrganizationUser({ user_id: 1, admin: true }).organization_admin).toBe(true);
   });
 });

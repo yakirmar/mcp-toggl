@@ -453,10 +453,6 @@ export class TogglAPI {
   }
 
   // Organization methods. Require organization admin rights.
-  async getOrganization(organizationId: number): Promise<Record<string, unknown>> {
-    return this.request<Record<string, unknown>>('GET', `/organizations/${organizationId}`);
-  }
-
   // Members of an organization, across all its workspaces. Paginated via
   // page/per_page; the envelope is not documented, so extraction is defensive.
   async getOrganizationUsers(

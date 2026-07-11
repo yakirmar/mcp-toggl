@@ -77,35 +77,3 @@ export function extractOrganizationUsers(payload: unknown): OrganizationUser[] {
 
   return [];
 }
-
-export interface NormalizedOrganizationUser {
-  organization_user_id?: number;
-  user_id?: number;
-  name: string;
-  email?: string;
-  organization_admin: boolean;
-  workspace_admin: boolean;
-  active: boolean;
-  role_id?: number;
-  workspace_count?: number;
-}
-
-export function normalizeOrganizationUser(user: OrganizationUser): NormalizedOrganizationUser {
-  const name =
-    user.name || user.fullname || user.email || `User ${user.user_id ?? user.id ?? 'unknown'}`;
-
-  return {
-    organization_user_id: user.id,
-    // Prefer the Toggl user id — that is what time entries are keyed by, so it is
-    // the id to feed into toggl_team_entries / toggl_team_summary.
-    user_id: user.user_id,
-    name,
-    email: user.email,
-    organization_admin: Boolean(user.organization_admin ?? user.admin),
-    workspace_admin: Boolean(user.workspace_admin),
-    // Toggl marks absence-of-active as `inactive`; treat missing as active.
-    active: user.inactive === undefined ? true : !user.inactive,
-    role_id: user.role_id,
-    workspace_count: Array.isArray(user.workspaces) ? user.workspaces.length : undefined,
-  };
-}

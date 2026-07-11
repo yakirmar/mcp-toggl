@@ -243,6 +243,8 @@ Added by this fork. **Requires workspace admin rights** — see [Fork Additions]
 
 **Permissions:** Toggl enforces visibility. If your token is not a workspace admin, these tools return only your own data rather than the team's — they will not error loudly, so verify with `toggl_list_users` first.
 
+**Raw responses.** Toggl does not publish a response schema for the users and report endpoints, so `toggl_list_users`, `toggl_list_org_users`, and `toggl_team_entries` return **Toggl's objects unmodified** rather than reshaping them around guessed field names — the assistant reads whatever Toggl actually sends. `toggl_team_entries` includes a `lookups` block (users, projects, clients) so ids can be resolved to names. The one exception is `toggl_team_summary`, which must know where the duration lives in order to add hours up; if it can't read durations from the rows, it returns a `schema_warning` rather than claiming the team logged zero hours.
+
 ### Cache Management
 
 | Tool | What it does |

@@ -21,7 +21,6 @@ import {
   OrganizationResolutionError,
   parseOrganizationId,
   resolveOrganizationId,
-  normalizeOrganizationUser,
 } from './organization.js';
 import {
   buildTimeEntryInterval,
@@ -50,7 +49,7 @@ import type {
   CreateClientRequest,
   UpdateClientRequest,
   ReportSearchParams,
-  TeamEntry,
+  ReportRow,
 } from './types.js';
 
 function parseInclusiveEndDate(value: string): Date {
@@ -288,12 +287,20 @@ const REPORT_FILTER_FIELDS = [
   'description',
 ] as const;
 
-// Shared path for both team tools: pull the cross-user detailed report, flatten
-// it, and attach user/project/client names.
-async function fetchTeamEntries(
+// Shared path for both team tools: pull the cross-user detailed report and the
+// reference data needed to make sense of the ids inside it. The rows themselves
+// are left untouched — the Reports API response schema is not published.
+async function fetchTeamReport(
   workspaceId: number,
   args: Record<string, unknown> | undefined
-): Promise<{ entries: TeamEntry[]; window: { start_date: string; end_date: string }; truncated: boolean }> {
+): Promise<{
+  rows: ReportRow[];
+  window: { start_date: string; end_date: string };
+  truncated: boolean;
+  users: Array<{ id: number; name: string }>;
+  projects: Array<{ id: number; name: string; client_id?: number }>;
+  clients: Array<{ id: number; name: string }>;
+}> {
   const window = reportDateWindow(args);
 
   const params: ReportSearchParams = {
@@ -314,23 +321,18 @@ async function fetchTeamEntries(
     cache.getClients(workspaceId),
   ]);
 
-  const projectById = new Map(projects.map((project) => [project.id, project]));
-  const clientById = new Map(clients.map((client) => [client.id, client]));
-
-  const entries = normalizeReportRows(rows, userNames).map((entry) => {
-    const project = entry.project_id !== undefined ? projectById.get(entry.project_id) : undefined;
-    const clientId = project?.client_id;
-    const client = clientId !== undefined ? clientById.get(clientId) : undefined;
-
-    return {
-      ...entry,
-      project_name: project?.name,
-      client_id: clientId,
-      client_name: client?.name,
-    };
-  });
-
-  return { entries, window, truncated };
+  return {
+    rows,
+    window,
+    truncated,
+    users: [...userNames].map(([id, name]) => ({ id, name })),
+    projects: projects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      client_id: project.client_id,
+    })),
+    clients: clients.map((client) => ({ id: client.id, name: client.name })),
+  };
 }
 
 // Create MCP server
@@ -1947,17 +1949,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const workspaceId = await resolveWorkspaceForTool(args, 'listing workspace users');
         const users = await api.getWorkspaceUsers(workspaceId);
 
+        // Passed through exactly as Toggl returns them: this endpoint's response
+        // schema is not published, so reshaping it here risks dropping or
+        // mislabeling fields. Interpret the objects as-is.
         return jsonResponse({
           workspace_id: workspaceId,
           count: users.length,
-          users: users.map((user) => ({
-            id: user.id,
-            name: userDisplayName(user),
-            email: user.email,
-            admin: user.admin,
-            owner: user.owner,
-            active: user.active,
-          })),
+          note: 'users[] is Toggl\'s raw response, unmodified. The Toggl user id (usually "id" here) is what time entries are keyed by — pass it as user_ids to toggl_team_entries / toggl_team_summary.',
+          users,
         });
       }
 
@@ -1973,42 +1972,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           only_admins: args?.only_admins as boolean | undefined,
         });
 
+        // Raw passthrough — this endpoint's response schema is not published.
         return jsonResponse({
           organization_id: organizationId,
           count: users.length,
-          users: users.map(normalizeOrganizationUser),
+          note: "users[] is Toggl's raw response, unmodified. CAUTION: these objects carry two different ids — the organization-user id (\"id\") and the Toggl user id (\"user_id\"). Only user_id matches time entries, so pass user_id (not id) as user_ids to toggl_team_entries / toggl_team_summary.",
+          users,
         });
       }
 
       case 'toggl_team_entries': {
         const workspaceId = await resolveWorkspaceForTool(args, 'reading team time entries');
-        const { entries, window, truncated } = await fetchTeamEntries(workspaceId, args);
-
-        entries.sort(
-          (a, b) => new Date(b.start ?? 0).getTime() - new Date(a.start ?? 0).getTime()
+        const { rows, window, truncated, users, projects, clients } = await fetchTeamReport(
+          workspaceId,
+          args
         );
 
         const requestedLimit = typeof args?.limit === 'number' ? args.limit : 100;
         const limit = Math.min(Math.max(1, Math.floor(requestedLimit)), 1000);
-        const limited = entries.slice(0, limit);
+        const limited = rows.slice(0, limit);
 
+        // Rows are returned exactly as the Reports API produced them — its response
+        // schema is not published, so reshaping risks dropping fields. Reference
+        // lookups are supplied alongside so ids can be resolved to names.
         return jsonResponse({
           workspace_id: workspaceId,
           start_date: window.start_date,
           end_date: window.end_date,
-          count: entries.length,
+          row_count: rows.length,
           returned: limited.length,
-          truncated: truncated || entries.length > limited.length,
-          entries: limited,
+          truncated: truncated || rows.length > limited.length,
+          note: "rows[] is the Toggl Reports API response, unmodified. A row typically groups several time entries under a nested array. Use the lookups below to resolve user_id / project_id / client_id to names. Durations are in seconds.",
+          lookups: { users, projects, clients },
+          rows: limited,
         });
       }
 
       case 'toggl_team_summary': {
         const workspaceId = await resolveWorkspaceForTool(args, 'summarizing team time');
-        const { entries, window, truncated } = await fetchTeamEntries(workspaceId, args);
+        const { rows, window, truncated, users: workspaceUsers } = await fetchTeamReport(
+          workspaceId,
+          args
+        );
 
+        // Unlike the other team tools this cannot be a raw passthrough: totalling
+        // hours per user requires knowing which field holds the duration.
+        const userNames = new Map(workspaceUsers.map((user) => [user.id, user.name]));
+        const entries = normalizeReportRows(rows, userNames);
         const users = summarizeByUser(entries);
         const totalSeconds = users.reduce((sum, user) => sum + user.total_seconds, 0);
+
+        // If Toggl returned rows but every duration came out zero, the field names
+        // this aggregation assumes are wrong. Say so instead of reporting "0 hours"
+        // as though the team logged nothing.
+        const schemaWarning =
+          rows.length > 0 && totalSeconds === 0
+            ? 'Toggl returned rows but no durations could be read from them, so these totals are unreliable. The report response shape may differ from what this aggregation expects. Use toggl_team_entries to inspect the raw rows.'
+            : undefined;
 
         return jsonResponse({
           workspace_id: workspaceId,
@@ -2018,6 +2038,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           total_hours: secondsToHours(totalSeconds),
           total_seconds: totalSeconds,
           truncated,
+          ...(schemaWarning ? { schema_warning: schemaWarning } : {}),
           users,
         });
       }

@@ -151,3 +151,28 @@ describe('summarizeByUser', () => {
     expect(summarizeByUser([])).toEqual([]);
   });
 });
+
+describe('schema drift signal', () => {
+  it('yields zero durations when the report shape is unrecognized', () => {
+    // This is what toggl_team_summary keys its schema_warning off: rows came back,
+    // but no duration could be read from them, so totals must not be trusted.
+    const alienRows = [
+      { user_id: 1, entries: [{ dur: 3600 }] },
+      { user_id: 2, entries: [{ dur: 1800 }] },
+    ] as unknown as ReportRow[];
+
+    const entries = normalizeReportRows(alienRows);
+    const total = entries.reduce((sum, e) => sum + e.duration_seconds, 0);
+
+    expect(entries.length).toBeGreaterThan(0);
+    expect(total).toBe(0);
+  });
+
+  it('reports a real total when the expected shape is present', () => {
+    const entries = normalizeReportRows([
+      { user_id: 1, time_entries: [{ id: 1, seconds: 3600 }] },
+    ]);
+
+    expect(entries.reduce((sum, e) => sum + e.duration_seconds, 0)).toBe(3600);
+  });
+});
