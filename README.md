@@ -169,6 +169,32 @@ npm install -g @yakirmar/mcp-toggl
 mcp-toggl --help
 ```
 
+### Hosted HTTP Server
+
+`dist/http-server.js` serves the same tools over Streamable HTTP at `/mcp`, for hosting on a platform like Heroku (the repo's `Procfile` runs it). The server holds no Toggl token: each client sends its own, and every session runs in a separate process with that token.
+
+Clients send two headers:
+
+| Header | Purpose |
+| --- | --- |
+| `X-API-Key` | Shared secret that gates access to the server (`MCP_HTTP_API_KEY`). |
+| `X-Toggl-Api-Key` | The caller's own Toggl API token. A session is bound to the token that opened it. |
+
+```bash
+claude mcp add --transport http toggl https://your-app.herokuapp.com/mcp \
+  --header "X-API-Key: <server key>" \
+  --header "X-Toggl-Api-Key: <your Toggl token>"
+```
+
+| Env var | Required | Default | Notes |
+| --- | --- | --- | --- |
+| `MCP_HTTP_API_KEY` | Yes | - | The server refuses to start without it. |
+| `PORT` | No | `3000` | Set automatically on Heroku. |
+| `MCP_HTTP_MAX_SESSIONS` | No | `10` | Each session is a child process, so size this to the dyno's memory. |
+| `MCP_HTTP_SESSION_IDLE_MS` | No | `1800000` | Idle sessions are closed after this long; clients re-initialize. |
+
+`TOGGL_CACHE_TTL`, `TOGGL_CACHE_SIZE`, and `TOGGL_BATCH_SIZE` are forwarded to each session; Toggl tokens set on the server are not.
+
 ## Tools
 
 ### Reports and Insights
