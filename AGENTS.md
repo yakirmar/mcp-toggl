@@ -116,7 +116,7 @@ Releases are automated by Release Please (`.github/workflows/release-please.yml`
 ```
 src/
 ├── index.ts           # MCP server entry point: tool schemas, CallTool handlers, env/config load, CLI --help/--version
-├── http-server.ts     # Streamable HTTP bridge (/mcp): X-API-Key gate (MCP_HTTP_API_KEY), one dist/index.js child per session spawned with the X-Toggl-Api-Key header as TOGGL_API_KEY; sessions bound to that token
+├── http-server.ts     # Streamable HTTP bridge (/mcp): X-API-Key gate (MCP_HTTP_API_KEY), one dist/index.js child per session spawned with X-Toggl-Api-Key as TOGGL_API_KEY and optional X-Toggl-Default-Workspace-Id as TOGGL_DEFAULT_WORKSPACE_ID; sessions bound to that token
 ├── toggl-api.ts        # Toggl Track API v9 HTTP client (TogglAPI); Basic auth, retry/backoff, rate-limit (429) & quota (402) handling; TogglAPIError / TimelineNotEnabledError
 ├── cache-manager.ts    # CacheManager: in-memory TTL cache for workspaces/projects/clients/tasks/tags; warmCache, hydrateTimeEntries, stats
 ├── workspace.ts        # resolveWorkspaceId / parseWorkspaceId; WorkspaceResolutionError when workspace is ambiguous
@@ -203,7 +203,7 @@ Loaded from the environment or a local `.env` file via `dotenv` (`config({ quiet
 | `TOGGL_CACHE_SIZE` | `1000` | Max cached entities (`src/index.ts:144`). |
 | `TOGGL_BATCH_SIZE` | `100` | Entries fetched per request (`src/index.ts:145`). |
 
-**HTTP mode only** (`src/http-server.ts`): `MCP_HTTP_API_KEY` (required; exits without it), `PORT` (default `3000`), `MCP_HTTP_MAX_SESSIONS` (default `10`), `MCP_HTTP_SESSION_IDLE_MS` (default `1800000`). The Toggl token comes from each client's `X-Toggl-Api-Key` header, never from server env; only the cache/batch tuning vars are forwarded to children.
+**HTTP mode only** (`src/http-server.ts`): `MCP_HTTP_API_KEY` (required; exits without it), `PORT` (default `3000`), `MCP_HTTP_MAX_SESSIONS` (default `10`), `MCP_HTTP_SESSION_IDLE_MS` (default `1800000`). The Toggl token and default workspace come from each client's `X-Toggl-Api-Key` / `X-Toggl-Default-Workspace-Id` headers, never from server env; only the cache/batch tuning vars are forwarded to children.
 
 > Note: the API token is sent as HTTP **Basic auth** with the token as the username and the literal string `api_token` as the password (`src/toggl-api.ts:63`), not as a bearer token. There is **no** `TOGGL_WORKSPACE_ID` variable — the default-workspace var is `TOGGL_DEFAULT_WORKSPACE_ID`.
 

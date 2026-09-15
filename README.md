@@ -178,12 +178,39 @@ Clients send two headers:
 | Header | Purpose |
 | --- | --- |
 | `X-API-Key` | Shared secret that gates access to the server (`MCP_HTTP_API_KEY`). |
-| `X-Toggl-Api-Key` | The caller's own Toggl API token. A session is bound to the token that opened it. |
+| `X-Toggl-Api-Key` | The caller's own Toggl API token (their `TOGGL_API_KEY`). A session is bound to the token that opened it. |
+| `X-Toggl-Default-Workspace-Id` | Optional. The caller's `TOGGL_DEFAULT_WORKSPACE_ID`. |
+
+Claude Code:
 
 ```bash
 claude mcp add --transport http toggl https://your-app.herokuapp.com/mcp \
   --header "X-API-Key: <server key>" \
-  --header "X-Toggl-Api-Key: <your Toggl token>"
+  --header "X-Toggl-Api-Key: <your Toggl token>" \
+  --header "X-Toggl-Default-Workspace-Id: 123456"
+```
+
+Claude Desktop (via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), which fills `${VAR}` in headers from `env`):
+
+```json
+{
+  "mcpServers": {
+    "mcp-toggl": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "https://your-app.herokuapp.com/mcp",
+        "--header", "X-API-Key:${MCP_HTTP_API_KEY}",
+        "--header", "X-Toggl-Api-Key:${TOGGL_API_KEY}",
+        "--header", "X-Toggl-Default-Workspace-Id:${TOGGL_DEFAULT_WORKSPACE_ID}"
+      ],
+      "env": {
+        "MCP_HTTP_API_KEY": "server key",
+        "TOGGL_API_KEY": "your_api_key_here",
+        "TOGGL_DEFAULT_WORKSPACE_ID": "123456"
+      }
+    }
+  }
+}
 ```
 
 | Env var | Required | Default | Notes |

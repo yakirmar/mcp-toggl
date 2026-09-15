@@ -98,6 +98,42 @@ describe.skipIf(!existsSync(entryPoint))('HTTP server', () => {
     }
   });
 
+  it('rejects a non-numeric X-Toggl-Default-Workspace-Id', async () => {
+    const res = await post({
+      'x-api-key': API_KEY,
+      'x-toggl-api-key': 'dummy-token',
+      'x-toggl-default-workspace-id': 'abc',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('passes X-Toggl-Default-Workspace-Id to the session as its default workspace', async () => {
+    async function createEntryMessage(headers: Record<string, string>): Promise<string> {
+      const client = new Client({ name: 'mcp-toggl-test', version: '1.0.0' });
+      const transport = new StreamableHTTPClientTransport(new URL(`${url}/mcp`), {
+        requestInit: { headers: { 'x-api-key': API_KEY, 'x-toggl-api-key': 'dummy', ...headers } },
+      });
+      await client.connect(transport);
+      try {
+        const result = await client.callTool({
+          name: 'toggl_create_entry',
+          arguments: { start: '2026-07-11T09:00:00Z' },
+        });
+        const text = (result.content as Array<{ text?: string }>)[0]?.text ?? '{}';
+        return (JSON.parse(text) as { message: string }).message;
+      } finally {
+        await client.close();
+      }
+    }
+
+    // With a default workspace, resolution stays offline and interval validation runs next.
+    expect(await createEntryMessage({ 'x-toggl-default-workspace-id': '123' })).toContain(
+      'exactly one of end or duration_minutes'
+    );
+    // Without one, the child has to ask Toggl for workspaces, which fails on the dummy token.
+    expect(await createEntryMessage({})).not.toContain('exactly one of end or duration_minutes');
+  });
+
   it('binds a session to the Toggl token that opened it', async () => {
     const init = await post({ 'x-api-key': API_KEY, 'x-toggl-api-key': 'token-a' });
     const sessionId = init.headers.get('mcp-session-id');

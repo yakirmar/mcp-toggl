@@ -2,7 +2,8 @@
 // Streamable HTTP entry point for hosted deployments (e.g. Heroku).
 //
 // Every MCP session gets its own stdio child running dist/index.js, spawned with
-// the Toggl token the client sent in X-Toggl-Api-Key. The server never holds a
+// the Toggl token the client sent in X-Toggl-Api-Key (and, optionally, the default
+// workspace from X-Toggl-Default-Workspace-Id). The server never holds a
 // Toggl token of its own, so each caller acts as their own Toggl account and
 // sessions share no cache or credentials. X-API-Key gates access to the server.
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -75,7 +76,12 @@ async function closeSession(sessionId: string): Promise<void> {
   await Promise.allSettled([session.http.close(), session.child.close()]);
 }
 
-async function openSession(req: IncomingMessage, res: ServerResponse, token: string) {
+async function openSession(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  defaultWorkspaceId: string | undefined
+) {
   let body: unknown;
   try {
     body = await readJsonBody(req);
@@ -93,6 +99,7 @@ async function openSession(req: IncomingMessage, res: ServerResponse, token: str
   }
 
   const env: Record<string, string> = { ...getDefaultEnvironment(), TOGGL_API_KEY: token };
+  if (defaultWorkspaceId) env.TOGGL_DEFAULT_WORKSPACE_ID = defaultWorkspaceId;
   for (const name of FORWARDED_ENV) {
     const value = process.env[name];
     if (value) env[name] = value;
@@ -169,7 +176,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       sendError(res, 400, 'Missing mcp-session-id header');
       return;
     }
-    await openSession(req, res, token);
+    const defaultWorkspaceId = header(req, 'x-toggl-default-workspace-id');
+    if (defaultWorkspaceId !== undefined && !/^[1-9]\d*$/.test(defaultWorkspaceId)) {
+      sendError(res, 400, 'X-Toggl-Default-Workspace-Id must be a positive integer');
+      return;
+    }
+    await openSession(req, res, token, defaultWorkspaceId);
     return;
   }
 
