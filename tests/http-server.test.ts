@@ -4,9 +4,16 @@ import { resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { deriveTokenKey, sealToken } from '../src/oauth.js';
 
 const entryPoint = resolve('dist/http-server.js');
 const API_KEY = 'test-api-key';
+const TOKEN_KEY = deriveTokenKey(API_KEY);
+
+function accessToken(toggl: string, ws?: string, ttlSeconds = 60): string {
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  return sealToken(TOKEN_KEY, { typ: 'access', toggl, ...(ws ? { ws } : {}), exp });
+}
 
 const INITIALIZE = {
   jsonrpc: '2.0',
@@ -62,6 +69,87 @@ describe.skipIf(!existsSync(entryPoint))('HTTP server', () => {
     await expect(startServer({ MCP_HTTP_API_KEY: '' })).rejects.toThrow(
       /MCP_HTTP_API_KEY must be set/
     );
+  });
+
+  it('answers unauthenticated requests with a 401 that points at OAuth metadata', async () => {
+    const res = await post({});
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toContain(
+      `resource_metadata="${url}/.well-known/oauth-protected-resource"`
+    );
+
+    const metadata = (await (
+      await fetch(`${url}/.well-known/oauth-protected-resource`)
+    ).json()) as {
+      resource: string;
+    };
+    expect(metadata.resource).toBe(`${url}/mcp`);
+  });
+
+  it('refuses plain-http requests and adds HSTS when the public URL is https', async () => {
+    const { proc: secure, url: secureUrl } = await startServer({
+      MCP_HTTP_API_KEY: API_KEY,
+      MCP_HTTP_PUBLIC_URL: 'https://mcp.example.com',
+    });
+    try {
+      // No X-Forwarded-Proto means the request didn't come through the TLS proxy.
+      const plain = await fetch(`${secureUrl}/health`, { redirect: 'manual' });
+      expect(plain.status).toBe(301);
+      expect(plain.headers.get('location')).toBe('https://mcp.example.com/health');
+      const plainPost = await fetch(`${secureUrl}/mcp`, { method: 'POST' });
+      expect(plainPost.status).toBe(400);
+
+      const tls = await fetch(`${secureUrl}/health`, { headers: { 'x-forwarded-proto': 'https' } });
+      expect(tls.status).toBe(200);
+      expect(tls.headers.get('strict-transport-security')).toContain('max-age=');
+
+      const metadata = (await (
+        await fetch(`${secureUrl}/.well-known/oauth-protected-resource`, {
+          headers: { 'x-forwarded-proto': 'https', host: 'evil.example' },
+        })
+      ).json()) as { resource: string };
+      expect(metadata.resource).toBe('https://mcp.example.com/mcp');
+    } finally {
+      secure.kill();
+    }
+  });
+
+  it('locks out an IP after repeated bad credentials', async () => {
+    const attempt = () =>
+      post({ 'x-api-key': 'wrong', 'x-toggl-api-key': 'dummy', 'x-forwarded-for': '203.0.113.7' });
+    let status = 0;
+    for (let i = 0; i < 11 && status !== 429; i++) status = (await attempt()).status;
+    expect(status).toBe(429);
+    // Valid credentials from another IP still work.
+    expect((await post({ 'x-api-key': API_KEY, 'x-toggl-api-key': 'dummy' })).status).toBe(200);
+  });
+
+  it('rejects an invalid or expired Bearer token', async () => {
+    expect((await post({ authorization: 'Bearer nope' })).status).toBe(401);
+    const expired = await post({ authorization: `Bearer ${accessToken('dummy', undefined, -1)}` });
+    expect(expired.status).toBe(401);
+    expect(expired.headers.get('www-authenticate')).toContain('error="invalid_token"');
+  });
+
+  it('serves a session from a Bearer token carrying the Toggl grant', async () => {
+    const client = new Client({ name: 'mcp-toggl-test', version: '1.0.0' });
+    const transport = new StreamableHTTPClientTransport(new URL(`${url}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${accessToken('dummy-token', '123')}` } },
+    });
+    await client.connect(transport);
+    try {
+      const result = await client.callTool({
+        name: 'toggl_create_entry',
+        arguments: { start: '2026-07-11T09:00:00Z' },
+      });
+      const text = (result.content as Array<{ text?: string }>)[0]?.text ?? '{}';
+      // Default workspace 123 from the token keeps resolution offline; validation runs next.
+      expect((JSON.parse(text) as { message: string }).message).toContain(
+        'exactly one of end or duration_minutes'
+      );
+    } finally {
+      await client.close();
+    }
   });
 
   it('rejects requests without a valid X-API-Key', async () => {

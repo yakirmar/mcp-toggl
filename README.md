@@ -171,9 +171,23 @@ mcp-toggl --help
 
 ### Hosted HTTP Server
 
-`dist/http-server.js` serves the same tools over Streamable HTTP at `/mcp`, for hosting on a platform like Heroku (the repo's `Procfile` runs it). The server holds no Toggl token: each client sends its own, and every session runs in a separate process with that token.
+`dist/http-server.js` serves the same tools over Streamable HTTP at `/mcp`, for hosting on a platform like Heroku (the repo's `Procfile` runs it). The server holds no Toggl token: each user brings their own, and every session runs in a separate process with that token. Users authenticate either with OAuth (Claude.ai connectors, Claude Code) or with headers (`mcp-remote`, scripts).
 
-Clients send two headers:
+#### As a Claude connector (OAuth)
+
+The server is its own small OAuth provider, so it can be added as a custom connector in Claude.ai, Claude Desktop, and mobile — no headers to configure:
+
+1. In Claude, go to **Customize > Connectors > Add custom connector** (Team/Enterprise owners: **Organization settings > Connectors**) and enter `https://your-app.herokuapp.com/mcp`.
+2. Click **Connect**. A sign-in page from the server asks for the **access code** (the server's `MCP_HTTP_API_KEY`, which the owner shares with the people allowed to use it), the user's own **Toggl API token**, and an optional **default workspace ID**.
+3. The server checks the token against Toggl and hands Claude an OAuth token that encodes that grant. Each user acts as their own Toggl account.
+
+Claude Code: `claude mcp add --transport http toggl https://your-app.herokuapp.com/mcp` and run `/mcp` to sign in.
+
+Access tokens last one hour and refresh automatically; a sign-in lasts 30 days, after which Claude asks the user to sign in again. Tokens are sealed with a key derived from `MCP_HTTP_API_KEY`, so rotating that value signs everyone out at once — that is also how you revoke access.
+
+#### With headers
+
+For clients that can't do OAuth, send these headers instead:
 
 | Header | Purpose |
 | --- | --- |
@@ -215,12 +229,20 @@ Claude Desktop (via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), wh
 
 | Env var | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `MCP_HTTP_API_KEY` | Yes | - | The server refuses to start without it. |
+| `MCP_HTTP_API_KEY` | Yes | - | Long random secret (e.g. `openssl rand -hex 32`). Doubles as the OAuth access code and the token-sealing key. The server refuses to start without it. |
+| `MCP_HTTP_PUBLIC_URL` | Recommended | derived from `Host` | The `https://` URL users reach the server at. When set, plain-http requests are refused, HSTS is sent, and OAuth metadata never depends on request headers. |
 | `PORT` | No | `3000` | Set automatically on Heroku. |
 | `MCP_HTTP_MAX_SESSIONS` | No | `10` | Each session is a child process, so size this to the dyno's memory. |
 | `MCP_HTTP_SESSION_IDLE_MS` | No | `1800000` | Idle sessions are closed after this long; clients re-initialize. |
 
 `TOGGL_CACHE_TTL`, `TOGGL_CACHE_SIZE`, and `TOGGL_BATCH_SIZE` are forwarded to each session; Toggl tokens set on the server are not.
+
+#### Security notes
+
+- Keep secrets in Heroku config vars (`heroku config:set`), never in the `Procfile`, code, or a committed `.env`.
+- Users' Toggl tokens are never stored on the server. They live only in the OAuth token Claude holds (AES-256-GCM sealed) and in the memory of that user's session process.
+- Failed access-code, API-key, and token attempts are rate-limited per client IP (10 per 15 minutes).
+- Sessions are bound to the credentials that opened them; a different user cannot attach to an existing session even with its ID.
 
 ## Tools
 
