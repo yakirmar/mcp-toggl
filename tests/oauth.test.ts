@@ -28,6 +28,13 @@ describe('isAllowedRedirectUri', () => {
     expect(isAllowedRedirectUri('http://localhost.evil.example/callback')).toBe(false);
     expect(isAllowedRedirectUri('not a url')).toBe(false);
   });
+
+  it('accepts configured extra redirect URIs by exact match only', () => {
+    const extra = ['https://app.example.com/oauth/callback'];
+    expect(isAllowedRedirectUri('https://app.example.com/oauth/callback', extra)).toBe(true);
+    expect(isAllowedRedirectUri('https://app.example.com/oauth/callback2', extra)).toBe(false);
+    expect(isAllowedRedirectUri('https://app.example.com/oauth/callback')).toBe(false);
+  });
 });
 
 describe('sealed tokens', () => {

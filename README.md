@@ -231,6 +231,7 @@ Claude Desktop (via [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), wh
 | --- | --- | --- | --- |
 | `MCP_HTTP_API_KEY` | Yes | - | Long random secret (e.g. `openssl rand -hex 32`). Doubles as the OAuth access code and the token-sealing key. The server refuses to start without it. |
 | `MCP_HTTP_PUBLIC_URL` | Recommended | derived from `Host` | The `https://` URL users reach the server at. When set, plain-http requests are refused, HSTS is sent, and OAuth metadata never depends on request headers. |
+| `MCP_HTTP_OAUTH_REDIRECT_URIS` | No | - | Comma-separated callback URLs of OAuth clients other than Claude (e.g. Devin), exact match. Claude's callback and loopback are always allowed. Rejected callbacks are logged so you can find the value to add. |
 | `PORT` | No | `3000` | Set automatically on Heroku. |
 | `MCP_HTTP_MAX_SESSIONS` | No | `10` | Each session is a child process, so size this to the dyno's memory. |
 | `MCP_HTTP_SESSION_IDLE_MS` | No | `1800000` | Idle sessions are closed after this long; clients re-initialize. |

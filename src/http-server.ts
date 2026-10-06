@@ -61,6 +61,11 @@ const oauth: OAuthContext = {
   accessCode: apiKey,
   publicUrl,
   limiter,
+  // Callbacks of OAuth clients other than Claude (e.g. Devin), comma-separated, exact match.
+  extraRedirectUris: (process.env.MCP_HTTP_OAUTH_REDIRECT_URIS ?? '')
+    .split(',')
+    .map((uri) => uri.trim())
+    .filter(Boolean),
   verifyTogglToken: async (token) => {
     try {
       await new TogglAPI(token).getMe();

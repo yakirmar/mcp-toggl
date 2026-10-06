@@ -61,6 +61,8 @@ export interface OAuthContext {
   publicUrl?: string;
   /** Locks out IPs that keep failing the access code or presenting bad codes/tokens. */
   limiter: FailureLimiter;
+  /** Exact redirect URIs to allow besides Claude's callback and loopback (other MCP clients). */
+  extraRedirectUris?: string[];
 }
 
 export function deriveTokenKey(secret: string): Buffer {
@@ -99,7 +101,8 @@ export function openAccessToken(key: Buffer, token: string): Grant | undefined {
   return payload && { toggl: payload.toggl, ws: payload.ws };
 }
 
-export function isAllowedRedirectUri(value: string): boolean {
+export function isAllowedRedirectUri(value: string, extraRedirectUris: string[] = []): boolean {
+  if (extraRedirectUris.includes(value)) return true;
   let url: URL;
   try {
     url = new URL(value);
@@ -205,11 +208,13 @@ interface AuthorizeParams {
 }
 
 function validateAuthorizeParams(
-  params: Record<string, string | undefined>
+  params: Record<string, string | undefined>,
+  extraRedirectUris: string[] = []
 ): AuthorizeParams | string {
   const { response_type, client_id, redirect_uri, code_challenge, code_challenge_method } = params;
   if (!client_id) return 'Missing client_id.';
-  if (!redirect_uri || !isAllowedRedirectUri(redirect_uri)) {
+  if (!redirect_uri || !isAllowedRedirectUri(redirect_uri, extraRedirectUris)) {
+    if (redirect_uri) console.error(`OAuth: rejected redirect_uri ${redirect_uri}`);
     return 'This redirect_uri is not allowed.';
   }
   if (response_type !== 'code') return 'response_type must be "code".';
@@ -289,7 +294,7 @@ async function handleAuthorize(
   const params = isPost
     ? await readParams(req)
     : Object.fromEntries(new URL(req.url ?? '/', 'http://localhost').searchParams);
-  const valid = validateAuthorizeParams(params);
+  const valid = validateAuthorizeParams(params, ctx.extraRedirectUris);
   if (typeof valid === 'string') {
     renderPage(res, 400, `<h1>Can't connect</h1><p>${escapeHtml(valid)}</p>`);
     return;
@@ -420,7 +425,11 @@ async function handleToken(req: IncomingMessage, res: ServerResponse, ctx: OAuth
   sendJson(res, 400, { error: 'unsupported_grant_type' });
 }
 
-async function handleRegister(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleRegister(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: OAuthContext
+): Promise<void> {
   let body: { redirect_uris?: unknown; client_name?: unknown };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
@@ -432,8 +441,12 @@ async function handleRegister(req: IncomingMessage, res: ServerResponse): Promis
   if (
     !Array.isArray(redirectUris) ||
     redirectUris.length === 0 ||
-    !redirectUris.every((uri) => typeof uri === 'string' && isAllowedRedirectUri(uri))
+    !redirectUris.every(
+      (uri) => typeof uri === 'string' && isAllowedRedirectUri(uri, ctx.extraRedirectUris)
+    )
   ) {
+    // Logged so the owner can add a new client's callback to MCP_HTTP_OAUTH_REDIRECT_URIS.
+    console.error(`OAuth: rejected registration redirect_uris ${JSON.stringify(redirectUris)}`);
     sendJson(res, 400, { error: 'invalid_redirect_uri' });
     return;
   }
@@ -502,7 +515,7 @@ export async function handleOAuthRequest(
       return true;
     }
     if (path === '/register' && method === 'POST') {
-      await handleRegister(req, res);
+      await handleRegister(req, res, ctx);
       return true;
     }
   } catch (_error) {
